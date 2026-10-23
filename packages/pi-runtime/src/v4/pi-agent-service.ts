@@ -272,8 +272,10 @@ export class PiAgentService {
       phase: "completedSuccess" as const,
       sessionEnded: true,
       hasBackgroundWork: false,
-      lastActivityAt: Math.floor(session.modifiedAt / 1000),
-      createdAt: Math.floor(session.createdAt / 1000),
+      // Milliseconds: the sidebar renders this as a relative time, and seconds
+      // came out as "20728 days".
+      lastActivityAt: Math.floor(session.modifiedAt),
+      createdAt: Math.floor(session.createdAt),
       ...(session.lastAssistantPreview
         ? { lastAssistantPreview: session.lastAssistantPreview }
         : {}),

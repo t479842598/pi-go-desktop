@@ -150,8 +150,8 @@ export class PiProjectService {
         position: index,
         pinned: false,
         deleted: false,
-        createdAt: Math.floor(stats.createdAt / 1000),
-        updatedAt: Math.floor(stats.updatedAt / 1000),
+        createdAt: Math.floor(stats.createdAt),
+        updatedAt: Math.floor(stats.updatedAt),
         primaryRootStatus: "available" as const,
       }));
   }
@@ -169,8 +169,8 @@ export class PiProjectService {
       traceId: session.sessionId,
       title: session.title,
       workspacePath: session.cwd,
-      createdAt: Math.floor(session.createdAt / 1000),
-      updatedAt: Math.floor(session.modifiedAt / 1000),
+      createdAt: Math.floor(session.createdAt),
+      updatedAt: Math.floor(session.modifiedAt),
       mode: "build",
       projectId: projectIdFor(session.cwd),
       hostId: LOCAL_HOST_ID,
@@ -299,8 +299,8 @@ export class PiProjectService {
       position: 0,
       pinned: input.pinned ?? false,
       deleted: false,
-      createdAt: Math.floor(Date.now() / 1000),
-      updatedAt: Math.floor(Date.now() / 1000),
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
       primaryRootStatus: "available",
     };
   }

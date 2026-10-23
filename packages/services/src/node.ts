@@ -3321,6 +3321,7 @@ async function mountPiAgentService(services: ServiceCollection): Promise<void> {
     PiModelSelectionService,
     PiSessionService,
     PiProjectService,
+    PiTaskGroupService,
     withServiceFallbacks,
   } = await import("@pi/runtime");
   const host = new PiSessionHost();
@@ -3358,6 +3359,14 @@ async function mountPiAgentService(services: ServiceCollection): Promise<void> {
   services.register(
     IProjectService,
     withServiceFallbacks(projects, "projectService") as unknown as IProjectService,
+  );
+
+  // The sidebar merges stored groups with the session index. ZCode's stored rows
+  // are old CLI projects; answering with none keeps the list to pi's sessions.
+  const taskGroups = new PiTaskGroupService();
+  services.register(
+    ITaskGroupService,
+    withServiceFallbacks(taskGroups, "taskGroupService") as unknown as ITaskGroupService,
   );
 }
 
