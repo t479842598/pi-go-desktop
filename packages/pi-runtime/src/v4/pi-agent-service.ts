@@ -25,10 +25,12 @@ import type {
   HelloMessage,
   V4ConversationResyncResult,
   V4ConversationSubscribeResult,
+  V4SessionsIndexSubscribeResult,
 } from "@zcode/shared/zcode-protocol-v4";
 
 import { PiSessionHost, type PiSessionHandle } from "../session-host.js";
 import { locateSession } from "../session-locator.js";
+import { listPiSessions } from "../session-list.js";
 import { ConversationProjection } from "./conversation-projection.js";
 
 export interface PiAgentServiceOptions {
@@ -54,6 +56,8 @@ interface Subscription {
 export class PiAgentService {
   private readonly host: PiSessionHost;
   private readonly subscriptions = new Map<string, Subscription>();
+  /** sessions-index subscription id → workspace id (the topic's second half). */
+  private readonly indexSubscriptions = new Map<string, string>();
   private readonly frameEmitter = new Emitter<unknown>();
   private readonly ttftEmitter = new Emitter<unknown>();
   private readonly connectionId = randomUUID();
@@ -142,6 +146,74 @@ export class PiAgentService {
     if (!subscription) return;
     subscription.projection.stop();
     this.subscriptions.delete(params.subscriptionId);
+  }
+
+  // ── sessions index ───────────────────────────────────────────────────────
+
+  /**
+   * The workspace session list.
+   *
+   * ZCode's sidebar reads rows from this topic rather than from the conversation
+   * channel. The response is ACK-only; the actual list arrives as a snapshot
+   * frame on the same workspace-level event stream as conversation frames,
+   * distinguished by its `sessions-index/<workspaceId>` topic.
+   */
+  async subscribeSessionsIndexV4(params: {
+    workspacePath: string;
+    base?: { logEpoch: string; seq: number };
+  }): Promise<V4SessionsIndexSubscribeResult> {
+    const subscriptionId = randomUUID();
+    const workspaceId = params.workspacePath;
+    this.indexSubscriptions.set(subscriptionId, workspaceId);
+
+    const ack = { subscriptionId, mode: "snapshot" as const, logEpoch: workspaceId };
+    // Emit after the ACK so the client has a subscription id to match against.
+    // The caller's RPC response and this notification are ordered by the host's
+    // outbox, which is the same contract the ZCode CLI relies on.
+    void this.emitSessionsIndex(workspaceId, subscriptionId);
+    return { ack };
+  }
+
+  async resyncSessionsIndexV4(params: { subscriptionId: string }): Promise<V4SessionsIndexSubscribeResult> {
+    const workspaceId = this.indexSubscriptions.get(params.subscriptionId);
+    if (!workspaceId) throw new Error(`Unknown subscription: ${params.subscriptionId}`);
+    void this.emitSessionsIndex(workspaceId, params.subscriptionId);
+    return {
+      ack: { subscriptionId: params.subscriptionId, mode: "snapshot", logEpoch: workspaceId },
+    };
+  }
+
+  async unsubscribeSessionsIndexV4(params: { subscriptionId: string }): Promise<void> {
+    this.indexSubscriptions.delete(params.subscriptionId);
+  }
+
+  private async emitSessionsIndex(workspaceId: string, subscriptionId: string): Promise<void> {
+    const sessions = await listPiSessions();
+    const summaries = sessions.map((session) => ({
+      sessionId: session.sessionId,
+      workspaceId,
+      title: session.title,
+      titleSource: "default" as const,
+      phase: "completedSuccess" as const,
+      sessionEnded: true,
+      hasBackgroundWork: false,
+      lastActivityAt: Math.floor(session.modifiedAt / 1000),
+      createdAt: Math.floor(session.createdAt / 1000),
+      ...(session.lastAssistantPreview
+        ? { lastAssistantPreview: session.lastAssistantPreview }
+        : {}),
+    }));
+    this.frameEmitter.fire({
+      topic: `sessions-index/${workspaceId}`,
+      subscriptionId,
+      fromSeq: 0,
+      toSeq: 1,
+      sentAt: Date.now(),
+      payload: {
+        kind: "snapshot",
+        snapshot: { protocolVersion: 1, workspaceId, logEpoch: workspaceId, sessions: summaries },
+      },
+    });
   }
 
   // ── commands ─────────────────────────────────────────────────────────────
@@ -258,6 +330,20 @@ export class PiAgentService {
   onDynamicLocalTtftFacts(_params: unknown): Event<unknown> {
     return this.ttftEmitter.event;
   }
+
+  /**
+   * Agent runtime availability.
+   *
+   * ZCode emits this when a CLI client attaches or detaches. pi has no separate
+   * agent process — the session lives in this one — so the runtime is
+   * permanently available and the event never fires. It must still exist:
+   * `ProxyChannel.fromService` throws `Event not found` for an unknown event,
+   * and an ordinary event member IS the `Event<T>` function itself.
+   */
+  onAgentRuntimeLifecycle: Event<unknown> = () => ({ dispose() {} });
+
+  /** Runtime restarts do not happen without an external agent process. */
+  onAgentRuntimeRestarted: Event<{ workspaceKey: string }> = () => ({ dispose() {} });
 
   // ── lifecycle ────────────────────────────────────────────────────────────
 

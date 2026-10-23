@@ -1,5 +1,6 @@
 export * from "./session-host.js";
 export * from "./session-locator.js";
+export * from "./service-fallbacks.js";
 export * from "./v4/projection.js";
 export * from "./v4/snapshot.js";
 export * from "./v4/session-view.js";

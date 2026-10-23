@@ -1174,6 +1174,9 @@ importers:
       '@earendil-works/pi-coding-agent':
         specifier: 0.87.1
         version: 0.87.1(@modelcontextprotocol/sdk@1.29.0(zod@4.6.5))(ws@8.20.0)(zod@4.6.5)
+      '@zcode/client':
+        specifier: workspace:*
+        version: link:../client
       '@zcode/rpc':
         specifier: workspace:*
         version: link:../rpc
@@ -1352,6 +1355,9 @@ importers:
       '@larksuiteoapi/node-sdk':
         specifier: 1.64.0
         version: 1.64.0
+      '@pi/runtime':
+        specifier: workspace:*
+        version: link:../pi-runtime
       '@zcode/provider':
         specifier: workspace:*
         version: link:../provider

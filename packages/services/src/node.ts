@@ -3284,15 +3284,48 @@ export async function createServerHostServices(options: {
     },
   });
   const migrationFailedPathCount = await workspaceAliasRepo.getFailedPathCount();
+  // pi-zcode: `projectStorageHostId` marks this process as a *remote* store
+  // owner, and `prepareSession` then refuses a request without a projectId
+  // (`project.remote-project-required`). That is right for a source server
+  // whose projects live in a synced store; the pi engine works on plain local
+  // directories, so it keeps local ownership and gets the mkdir-on-demand path.
+  const piEngine = process.env["PI_ENGINE"] === "pi";
   const services = createLocalServices({
     zcodeBuiltinProviderConfigFilePath: options.zcodeBuiltinProviderConfigFilePath,
     providerProvisioningTargetEnabled: options.providerProvisioningTargetEnabled,
     serviceAuthorityMode: "standalone-server",
     topicResourceRelayChannel: options.topicResourceRelayChannel,
-    projectStorageHostId,
+    ...(piEngine ? {} : { projectStorageHostId }),
     sourceServerWorkspaceService,
   });
+  // pi-zcode: the conversation channel is served by the pi runtime instead of
+  // the ZCode CLI proxy. Registration is by channel name (`ServiceCollection` is
+  // a Map), so this replaces the ZCode instance in place — every other service
+  // stays ZCode's.
+  if (piEngine) {
+    await mountPiAgentService(services);
+  }
   return { services, workspaceIdentityMapper, migrationFailedPathCount };
+}
+
+/**
+ * Swap the `zcode-agent` channel for the pi implementation.
+ *
+ * Kept as a dynamic import so the pi runtime (and the pi SDK it pulls in) is
+ * only loaded when the flag is on; the default ZCode path must not pay for it.
+ */
+async function mountPiAgentService(services: ServiceCollection): Promise<void> {
+  const { PiSessionHost, PiAgentService, withServiceFallbacks } = await import("@pi/runtime");
+  const host = new PiSessionHost();
+  const agent = new PiAgentService({ host });
+  // pi serves a subset of the 150-member interface. The fallback layer answers
+  // the rest explicitly instead of letting `ProxyChannel.fromService` throw:
+  // an unknown event/method there escapes the channel server and kills the
+  // whole process (ZCode expects every member of the interface to exist).
+  services.register(
+    IZCodeAgentService,
+    withServiceFallbacks(agent) as unknown as IZCodeAgentService,
+  );
 }
 
 export { scopeConversationShareServiceForAttachment } from "./conversation-share/conversationShareConnectionScope.js";
