@@ -68,13 +68,14 @@ test("subscribe returns a schema-valid ACK", async () => {
   await withService(async (service, cwd) => {
     const created = await service.sendConversationCommandV4({
       sessionId: "ignored",
-      envelope: { commandId: "cmd-1", payload: { type: "createSession", workspaceId: cwd } },
+      // The command name is `envelope.type`; `payload` holds only arguments.
+      envelope: { commandId: "cmd-1", type: "createSession", payload: { workspaceId: cwd } },
     });
     const ack = commandAckSchema.safeParse(created);
     assert.ok(ack.success, ack.success ? "" : JSON.stringify(ack.error.issues, null, 2));
 
-    const sessionId = created.message;
-    assert.ok(sessionId, "createSession must report the new session id");
+    const sessionId = created.result?.type === "createSession" ? created.result.sessionId : undefined;
+    assert.ok(sessionId, "createSession must report the new session id in result.sessionId");
 
     const result = await service.subscribeConversationV4({ sessionId: sessionId! });
     const parsed = v4ConversationSubscribeResultSchema.safeParse(result);
@@ -88,9 +89,11 @@ test("subscribing emits a schema-valid opening snapshot frame", async () => {
     const frames: unknown[] = [];
     const created = await service.sendConversationCommandV4({
       sessionId: "ignored",
-      envelope: { commandId: "cmd-1", payload: { type: "createSession", workspaceId: cwd } },
+      // The command name is `envelope.type`; `payload` holds only arguments.
+      envelope: { commandId: "cmd-1", type: "createSession", payload: { workspaceId: cwd } },
     });
-    const sessionId = created.message!;
+    const sessionId = created.result?.type === "createSession" ? created.result.sessionId : undefined;
+    assert.ok(sessionId, "createSession must report result.sessionId");
 
     // Attach before subscribing so the opening frame is captured.
     service.onDynamicConversationFrame({})((frame) => frames.push(frame));
@@ -112,11 +115,14 @@ test("an unknown payload type is rejected with a reason code", async () => {
   await withService(async (service, cwd) => {
     const created = await service.sendConversationCommandV4({
       sessionId: "ignored",
-      envelope: { commandId: "cmd-1", payload: { type: "createSession", workspaceId: cwd } },
+      // The command name is `envelope.type`; `payload` holds only arguments.
+      envelope: { commandId: "cmd-1", type: "createSession", payload: { workspaceId: cwd } },
     });
+    const createdSessionId =
+      created.result?.type === "createSession" ? created.result.sessionId : "unknown";
     const result = await service.sendConversationCommandV4({
-      sessionId: created.message!,
-      envelope: { commandId: "cmd-2", payload: { type: "rewindFilesEverything" } },
+      sessionId: createdSessionId,
+      envelope: { commandId: "cmd-2", type: "rewindFilesEverything", payload: {} },
     });
     const parsed = commandAckSchema.safeParse(result);
     assert.ok(parsed.success, parsed.success ? "" : JSON.stringify(parsed.error.issues, null, 2));

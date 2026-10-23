@@ -52,11 +52,15 @@ test("zcode-agent resolves through the collection by its real channel name", asy
 
     const created = await services.agent.sendConversationCommandV4({
       sessionId: "new",
-      envelope: { commandId: "c1", payload: { type: "createSession", workspaceId: cwd } },
+      envelope: { commandId: "c1", type: "createSession", payload: { workspaceId: cwd } },
     });
     assert.ok(commandAckSchema.safeParse(created).success);
 
-    const sub = await services.agent.subscribeConversationV4({ sessionId: created.message! });
+    const createdSessionId =
+      created.result?.type === "createSession" ? created.result.sessionId : null;
+    assert.ok(createdSessionId, "createSession must report result.sessionId");
+
+    const sub = await services.agent.subscribeConversationV4({ sessionId: createdSessionId! });
     assert.ok(
       v4ConversationSubscribeResultSchema.safeParse(sub).success,
       "subscribe ACK must satisfy the wire schema",

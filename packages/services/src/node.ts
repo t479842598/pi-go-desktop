@@ -3315,7 +3315,8 @@ export async function createServerHostServices(options: {
  * only loaded when the flag is on; the default ZCode path must not pay for it.
  */
 async function mountPiAgentService(services: ServiceCollection): Promise<void> {
-  const { PiSessionHost, PiAgentService, withServiceFallbacks } = await import("@pi/runtime");
+  const { PiSessionHost, PiAgentService, PiModelSelectionService, PiSessionService, withServiceFallbacks } =
+    await import("@pi/runtime");
   const host = new PiSessionHost();
   const agent = new PiAgentService({ host });
   // pi serves a subset of the 150-member interface. The fallback layer answers
@@ -3325,6 +3326,23 @@ async function mountPiAgentService(services: ServiceCollection): Promise<void> {
   services.register(
     IZCodeAgentService,
     withServiceFallbacks(agent) as unknown as IZCodeAgentService,
+  );
+
+  // The composer stays disabled while the model picker is empty, so the pi model
+  // list has to reach the UI. Serving it as the model-selection view keeps pi's
+  // registry and ZCode's provider registry independent.
+  const models = new PiModelSelectionService();
+  services.register(
+    IModelSelectionService,
+    withServiceFallbacks(models, "modelSelectionService") as unknown as IModelSelectionService,
+  );
+
+  // Workspace prepare awaits this and throws on failure, which would leave the
+  // composer permanently disabled. It has to answer before anything can be sent.
+  const session = new PiSessionService();
+  services.register(
+    IZCodeSessionService,
+    withServiceFallbacks(session, "zcodeSessionService") as unknown as IZCodeSessionService,
   );
 }
 

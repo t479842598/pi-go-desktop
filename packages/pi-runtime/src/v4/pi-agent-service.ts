@@ -107,7 +107,13 @@ export class PiAgentService {
 
     const projection = new ConversationProjection(handle, {
       subscriptionId,
-      emit: (frame) => this.frameEmitter.fire(frame),
+      emit: (frame) => {
+        console.log(
+          `[pi-engine] frame ${frame.payload.kind} seq=${frame.fromSeq}->${frame.toSeq} ` +
+            `rows=${frame.payload.kind === "snapshot" ? (frame.payload.snapshot as { rows?: { window?: unknown[] } }).rows?.window?.length ?? 0 : frame.payload.deltas.length}`,
+        );
+        this.frameEmitter.fire(frame);
+      },
     });
 
     this.subscriptions.set(subscriptionId, {
@@ -220,29 +226,78 @@ export class PiAgentService {
 
   async sendConversationCommandV4(params: {
     sessionId: string;
-    envelope?: { commandId: string; payload?: { type: string; [key: string]: unknown } };
+    envelope?: {
+      commandId: string;
+      /** The command name lives on the envelope itself, not inside `payload`. */
+      type?: string;
+      payload?: { type?: string; [key: string]: unknown };
+    };
   }): Promise<CommandAck> {
     const commandId = params.envelope?.commandId ?? randomUUID();
-    const payload = params.envelope?.payload;
-    if (!payload) return this.reject(commandId, "emptyCommand");
+    const envelope = params.envelope;
+    // The command name is `envelope.type`; `payload` carries only its arguments.
+    const commandType = envelope?.type ?? envelope?.payload?.type;
+    const payload = (envelope?.payload ?? {}) as { type?: string; [key: string]: unknown };
+    if (!commandType) return this.reject(commandId, "emptyCommand");
+    console.log(`[pi-engine] cmd=${commandType} session=${params.sessionId ?? "(none)"}`);
 
     // createSession runs before a session exists, so it must not go through
     // ensureSession — the id on the envelope names a session that isn't there.
-    if (payload.type === "createSession") {
+    if (commandType === "createSession") {
       const cwd = typeof payload.workspaceId === "string" ? payload.workspaceId : process.cwd();
       const created = await this.host.open({ cwd });
-      return { ...this.accept(commandId), message: created.sessionId };
+      // The ACK's `result` is what the UI reads the new id from; `message` would
+      // be ignored, and the UI would retry the create forever.
+      return {
+        ...this.accept(commandId),
+        result: {
+          type: "createSession" as const,
+          sessionId: created.sessionId,
+          input: {
+            delivery: "startNow" as const,
+            inputId: `${created.sessionId}-create`,
+          },
+        },
+      };
+    }
+
+    // A session-less envelope still arrives for the first message of a draft:
+    // the UI sends `sendText` and expects the backend to have created the
+    // session. Treat a missing id as "open a new one in the cwd it names".
+    if (!params.sessionId) {
+      if (commandType === "sendText") {
+        const text = typeof payload.text === "string" ? payload.text : "";
+        if (!text) return this.reject(commandId, "emptyText");
+        const cwd =
+          typeof payload.workspaceId === "string" ? payload.workspaceId : process.cwd();
+        const created = await this.host.open({ cwd });
+        void created.session.prompt(text).catch((error: unknown) => {
+          console.error("[pi-engine] prompt failed", error);
+        });
+        return {
+          ...this.accept(commandId),
+          result: {
+            type: "createSession" as const,
+            sessionId: created.sessionId,
+            input: { delivery: "startNow" as const, inputId: `${created.sessionId}-first` },
+          },
+        };
+      }
+      return this.reject(commandId, `noSessionFor:${commandType}`);
     }
 
     const handle = await this.ensureSession(params.sessionId);
 
-    switch (payload.type) {
+    switch (commandType) {
       case "sendText": {
         const text = typeof payload.text === "string" ? payload.text : "";
         if (!text) return this.reject(commandId, "emptyText");
+        console.log(`[pi-engine] prompt -> ${handle.sessionId}: ${text.slice(0, 60)}`);
         // pi queues the prompt itself while a turn is running, which is exactly
         // the `startNow`/`enqueue` split the snapshot's inputRouting reports.
-        void handle.session.prompt(text);
+        void handle.session.prompt(text).catch((error: unknown) => {
+          console.error("[pi-engine] prompt failed", error);
+        });
         return this.accept(commandId);
       }
 
@@ -252,7 +307,7 @@ export class PiAgentService {
       }
 
       default:
-        return this.reject(commandId, `unsupported:${payload.type}`);
+        return this.reject(commandId, `unsupported:${commandType}`);
     }
   }
 
