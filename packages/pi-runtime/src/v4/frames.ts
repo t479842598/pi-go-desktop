@@ -11,6 +11,10 @@
  * those live in ./projection.
  */
 
+import { randomUUID } from "node:crypto";
+
+import { V4_WIRE_PROTOCOL_VERSION } from "@zcode/shared/zcode-protocol-v4";
+
 import type { ProjectedDelta, ProjectedRow } from "./projection.js";
 import { buildConversationSnapshot } from "./snapshot.js";
 import type { PiSessionView } from "./session-view.js";
@@ -24,6 +28,45 @@ export interface ConversationFrame {
   payload:
     | { kind: "snapshot"; snapshot: Record<string, unknown> }
     | { kind: "deltas"; deltas: ProjectedDelta[] };
+}
+
+/**
+ * A frame as it travels on the wire.
+ *
+ * `onDynamicConversationFrame` carries `ConversationTopicWireCandidate`, not the
+ * bare frame: the UI's store only decodes this envelope, and a bare frame is
+ * rejected as an invalid payload — which the store then treats as a content
+ * fault, discarding the draft binding and leaving the composer disabled.
+ *
+ * `complete` is used because a logical frame here is always one physical frame;
+ * the `fragment` variant only exists for frames over the size limit.
+ */
+export interface ConversationWireFrame {
+  wireVersion: number;
+  kind: "complete";
+  deliveryKind: "initial" | "online" | "recovery";
+  logicalFrameId: string;
+  logicalFrameOrdinal: number;
+  topic: string;
+  subscriptionId: string;
+  frame: ConversationFrame;
+}
+
+export function toWireFrame(
+  frame: ConversationFrame,
+  ordinal: number,
+  deliveryKind: "initial" | "online" | "recovery" = "online",
+): ConversationWireFrame {
+  return {
+    wireVersion: V4_WIRE_PROTOCOL_VERSION,
+    kind: "complete",
+    deliveryKind,
+    logicalFrameId: randomUUID(),
+    logicalFrameOrdinal: ordinal,
+    topic: frame.topic,
+    subscriptionId: frame.subscriptionId,
+    frame,
+  };
 }
 
 export function conversationTopic(sessionId: string): string {
@@ -40,6 +83,7 @@ export function conversationTopic(sessionId: string): string {
 export class ConversationFrameBuilder {
   private seq = 0;
   private revision = 0;
+  private ordinal = 0;
   private readonly topic: string;
 
   constructor(
@@ -57,6 +101,7 @@ export class ConversationFrameBuilder {
   snapshot(view: PiSessionView, rows: ProjectedRow[]): ConversationFrame {
     const toSeq = ++this.seq;
     const revision = this.nextRevision();
+    this.ordinal += 1;
     return {
       topic: this.topic,
       subscriptionId: this.subscriptionId,
@@ -80,6 +125,7 @@ export class ConversationFrameBuilder {
     if (deltas.length === 0) return null;
     const fromSeq = this.seq;
     const toSeq = ++this.seq;
+    this.ordinal += 1;
     return {
       topic: this.topic,
       subscriptionId: this.subscriptionId,
@@ -92,5 +138,16 @@ export class ConversationFrameBuilder {
 
   get currentSeq(): number {
     return this.seq;
+  }
+
+  /**
+   * Wrap the next frame for the wire.
+   *
+   * The first frame of a subscription is `initial`; anything after it is
+   * `online`. The store uses the kind to decide whether a frame may be applied
+   * before the ACK barrier lifts.
+   */
+  wrap(frame: ConversationFrame): ConversationWireFrame {
+    return toWireFrame(frame, this.ordinal, this.ordinal === 1 ? "initial" : "online");
   }
 }

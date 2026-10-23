@@ -17,7 +17,7 @@ import {
   clientHelloSchema,
   commandAckSchema,
   conversationSnapshotSchema,
-  conversationTopicFrameSchema,
+  conversationTopicWireFrameSchema,
   helloMessageSchema,
   v4ConversationSubscribeResultSchema,
 } from "@zcode/shared/zcode-protocol-v4";
@@ -84,7 +84,7 @@ test("subscribe returns a schema-valid ACK", async () => {
   });
 });
 
-test("subscribing emits a schema-valid opening snapshot frame", async () => {
+test("subscribing emits a schema-valid opening snapshot wire frame", async () => {
   await withService(async (service, cwd) => {
     const frames: unknown[] = [];
     const created = await service.sendConversationCommandV4({
@@ -97,16 +97,24 @@ test("subscribing emits a schema-valid opening snapshot frame", async () => {
 
     // Attach before subscribing so the opening frame is captured.
     service.onDynamicConversationFrame({})((frame) => frames.push(frame));
-    await service.subscribeConversationV4({ sessionId });
+    await service.subscribeConversationV4({ sessionId: sessionId! });
 
     assert.ok(frames.length > 0, "subscribe must emit at least one frame");
-    for (const frame of frames) {
-      const parsed = conversationTopicFrameSchema.safeParse(frame);
+    for (const wire of frames) {
+      // The UI decodes the wire envelope, not the bare frame — a bare frame is
+      // rejected as an invalid payload and takes the draft binding with it.
+      const parsed = conversationTopicWireFrameSchema.safeParse(wire);
       assert.ok(parsed.success, parsed.success ? "" : JSON.stringify(parsed.error.issues, null, 2));
     }
-    const first = frames[0] as { payload: { kind: string; snapshot?: unknown } };
-    assert.equal(first.payload.kind, "snapshot");
-    const snapshot = conversationSnapshotSchema.safeParse(first.payload.snapshot);
+    const first = frames[0] as {
+      kind: string;
+      deliveryKind: string;
+      frame: { payload: { kind: string; snapshot?: unknown } };
+    };
+    assert.equal(first.kind, "complete");
+    assert.equal(first.deliveryKind, "initial");
+    assert.equal(first.frame.payload.kind, "snapshot");
+    const snapshot = conversationSnapshotSchema.safeParse(first.frame.payload.snapshot);
     assert.ok(snapshot.success, snapshot.success ? "" : JSON.stringify(snapshot.error.issues, null, 2));
   });
 });

@@ -2,6 +2,7 @@ export * from "./session-host.js";
 export * from "./session-locator.js";
 export * from "./session-list.js";
 export * from "./session-service.js";
+export * from "./project-service.js";
 export * from "./service-fallbacks.js";
 export * from "./model-selection.js";
 export * from "./v4/projection.js";

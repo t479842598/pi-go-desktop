@@ -3315,8 +3315,14 @@ export async function createServerHostServices(options: {
  * only loaded when the flag is on; the default ZCode path must not pay for it.
  */
 async function mountPiAgentService(services: ServiceCollection): Promise<void> {
-  const { PiSessionHost, PiAgentService, PiModelSelectionService, PiSessionService, withServiceFallbacks } =
-    await import("@pi/runtime");
+  const {
+    PiSessionHost,
+    PiAgentService,
+    PiModelSelectionService,
+    PiSessionService,
+    PiProjectService,
+    withServiceFallbacks,
+  } = await import("@pi/runtime");
   const host = new PiSessionHost();
   const agent = new PiAgentService({ host });
   // pi serves a subset of the 150-member interface. The fallback layer answers
@@ -3343,6 +3349,15 @@ async function mountPiAgentService(services: ServiceCollection): Promise<void> {
   services.register(
     IZCodeSessionService,
     withServiceFallbacks(session, "zcodeSessionService") as unknown as IZCodeSessionService,
+  );
+
+  // The workspace picker and the composer's send gate both read projects. When
+  // this fails the UI falls back to its folder dialog, which covers the
+  // composer — so it is the service that unlocks an end-to-end send.
+  const projects = new PiProjectService();
+  services.register(
+    IProjectService,
+    withServiceFallbacks(projects, "projectService") as unknown as IProjectService,
   );
 }
 

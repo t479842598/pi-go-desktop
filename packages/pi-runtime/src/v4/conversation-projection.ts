@@ -27,14 +27,15 @@ import {
   type ProjectedDelta,
   type ProjectionState,
 } from "./projection.js";
-import { ConversationFrameBuilder } from "./frames.js";
+import { ConversationFrameBuilder, type ConversationWireFrame } from "./frames.js";
 import { readSessionView, type PiPendingApproval, type PiPhase } from "./session-view.js";
 import type { PiEvent, PiSessionHandle } from "../session-host.js";
 
 export interface ConversationProjectionOptions {
   subscriptionId: string;
   /** Called for every frame the projection produces, in order. */
-  emit: (frame: ReturnType<ConversationFrameBuilder["snapshot"]>) => void;
+  /** Called for every wire frame the projection produces, in order. */
+  emit: (frame: ConversationWireFrame) => void;
 }
 
 /**
@@ -48,7 +49,10 @@ export class ConversationProjection {
   private readonly state: ProjectionState = createProjectionState();
   private readonly frames: ConversationFrameBuilder;
   private unsubscribe: (() => void) | null = null;
-  private phase: PiPhase = "running";
+  // A freshly opened session is idle. Starting as "running" made the very first
+  // snapshot report a busy runtime, so the composer showed its stop control
+  // instead of a send button and the message could never be submitted.
+  private phase: PiPhase = "completedSuccess";
   private title: string | undefined;
   private pendingApprovals: PiPendingApproval[] = [];
   private errorMessage: string | undefined;
@@ -102,12 +106,13 @@ export class ConversationProjection {
       errorMessage: this.errorMessage,
       errorCode: this.errorCode,
     });
-    this.options.emit(this.frames.snapshot(view, snapshotRows(this.state)));
+    // `onDynamicConversationFrame` carries the wire envelope, not the bare frame.
+    this.options.emit(this.frames.wrap(this.frames.snapshot(view, snapshotRows(this.state))));
   }
 
   private emitDeltas(deltas: ProjectedDelta[]): void {
     const frame = this.frames.deltas(deltas);
-    if (frame) this.options.emit(frame);
+    if (frame) this.options.emit(this.frames.wrap(frame));
   }
 
   private handle(event: PiEvent): void {

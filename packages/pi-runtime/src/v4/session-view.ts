@@ -96,10 +96,14 @@ export function readSessionView(
   };
 
   const usage = state.usage ?? {};
+  // A session that is not streaming is idle, not "running". Reporting a busy
+  // phase makes the composer render its stop control instead of the send
+  // button, so the user can never submit.
+  const inferredPhase: PiPhase = extras.phase ?? (state.isStreaming ? "running" : "completedSuccess");
   return {
     sessionId: session.sessionId,
     logEpoch: session.sessionId,
-    phase: extras.phase ?? (state.isStreaming ? "running" : "completedSuccess"),
+    phase: inferredPhase,
     title: extras.title,
     model: state.model
       ? {

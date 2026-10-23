@@ -32,6 +32,7 @@ import { PiSessionHost, type PiSessionHandle } from "../session-host.js";
 import { locateSession } from "../session-locator.js";
 import { listPiSessions } from "../session-list.js";
 import { ConversationProjection } from "./conversation-projection.js";
+import { toWireFrame } from "./frames.js";
 
 export interface PiAgentServiceOptions {
   host?: PiSessionHost;
@@ -107,12 +108,17 @@ export class PiAgentService {
 
     const projection = new ConversationProjection(handle, {
       subscriptionId,
-      emit: (frame) => {
+      emit: (wire) => {
+        const frame = wire.frame;
+        const size =
+          frame.payload.kind === "snapshot"
+            ? (frame.payload.snapshot as { rows?: { window?: unknown[] } }).rows?.window?.length ?? 0
+            : frame.payload.deltas.length;
         console.log(
-          `[pi-engine] frame ${frame.payload.kind} seq=${frame.fromSeq}->${frame.toSeq} ` +
-            `rows=${frame.payload.kind === "snapshot" ? (frame.payload.snapshot as { rows?: { window?: unknown[] } }).rows?.window?.length ?? 0 : frame.payload.deltas.length}`,
+          `[pi-engine] frame ${frame.payload.kind} ${wire.deliveryKind} ` +
+            `seq=${frame.fromSeq}->${frame.toSeq} units=${size}`,
         );
-        this.frameEmitter.fire(frame);
+        this.frameEmitter.fire(wire);
       },
     });
 
@@ -209,27 +215,35 @@ export class PiAgentService {
         ? { lastAssistantPreview: session.lastAssistantPreview }
         : {}),
     }));
-    this.frameEmitter.fire({
-      topic: `sessions-index/${workspaceId}`,
-      subscriptionId,
-      fromSeq: 0,
-      toSeq: 1,
-      sentAt: Date.now(),
-      payload: {
-        kind: "snapshot",
-        snapshot: { protocolVersion: 1, workspaceId, logEpoch: workspaceId, sessions: summaries },
-      },
-    });
+    this.frameEmitter.fire(
+      toWireFrame(
+        {
+          topic: `sessions-index/${workspaceId}`,
+          subscriptionId,
+          fromSeq: 0,
+          toSeq: 1,
+          sentAt: Date.now(),
+          payload: {
+            kind: "snapshot",
+            snapshot: { protocolVersion: 1, workspaceId, logEpoch: workspaceId, sessions: summaries },
+          },
+        },
+        1,
+        "initial",
+      ),
+    );
   }
 
   // ── commands ─────────────────────────────────────────────────────────────
 
   async sendConversationCommandV4(params: {
-    sessionId: string;
+    sessionId?: string;
     envelope?: {
       commandId: string;
       /** The command name lives on the envelope itself, not inside `payload`. */
       type?: string;
+      /** The session the command targets; null only for `createSession`. */
+      sessionId?: string | null;
       payload?: { type?: string; [key: string]: unknown };
     };
   }): Promise<CommandAck> {
@@ -238,8 +252,12 @@ export class PiAgentService {
     // The command name is `envelope.type`; `payload` carries only its arguments.
     const commandType = envelope?.type ?? envelope?.payload?.type;
     const payload = (envelope?.payload ?? {}) as { type?: string; [key: string]: unknown };
+    // The UI carries the target inside the envelope; the outer field is absent
+    // for every command it sends, so reading only that made every command look
+    // session-less and drop its delete/queue bookkeeping.
+    const sessionId = envelope?.sessionId ?? params.sessionId ?? null;
     if (!commandType) return this.reject(commandId, "emptyCommand");
-    console.log(`[pi-engine] cmd=${commandType} session=${params.sessionId ?? "(none)"}`);
+    console.log(`[pi-engine] cmd=${commandType} session=${sessionId ?? "(none)"}`);
 
     // createSession runs before a session exists, so it must not go through
     // ensureSession — the id on the envelope names a session that isn't there.
@@ -264,13 +282,14 @@ export class PiAgentService {
     // A session-less envelope still arrives for the first message of a draft:
     // the UI sends `sendText` and expects the backend to have created the
     // session. Treat a missing id as "open a new one in the cwd it names".
-    if (!params.sessionId) {
+    if (!sessionId) {
       if (commandType === "sendText") {
         const text = typeof payload.text === "string" ? payload.text : "";
         if (!text) return this.reject(commandId, "emptyText");
         const cwd =
           typeof payload.workspaceId === "string" ? payload.workspaceId : process.cwd();
         const created = await this.host.open({ cwd });
+        console.log(`[pi-engine] prompt(new session ${created.sessionId}): ${text.slice(0, 60)}`);
         void created.session.prompt(text).catch((error: unknown) => {
           console.error("[pi-engine] prompt failed", error);
         });
@@ -286,7 +305,7 @@ export class PiAgentService {
       return this.reject(commandId, `noSessionFor:${commandType}`);
     }
 
-    const handle = await this.ensureSession(params.sessionId);
+    const handle = await this.ensureSession(sessionId);
 
     switch (commandType) {
       case "sendText": {
@@ -305,6 +324,17 @@ export class PiAgentService {
         await handle.session.abort();
         return this.accept(commandId);
       }
+
+      case "deleteSession": {
+        // The UI creates a draft session eagerly and deletes it when the draft is
+        // abandoned. Rejecting that leaves orphaned in-memory sessions per draft.
+        this.host.close(handle.sessionId);
+        return this.accept(commandId);
+      }
+
+      case "setFollowupMode":
+        // pi's own queue is drain-on-idle; the `guide` variant has no equivalent.
+        return this.accept(commandId);
 
       default:
         return this.reject(commandId, `unsupported:${commandType}`);

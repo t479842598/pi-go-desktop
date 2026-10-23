@@ -45,6 +45,11 @@ export function buildConversationSnapshot(input: SnapshotInput): Record<string, 
     seq,
     revision,
 
+    // The composer treats a missing `runtimeInitialization` as "still connecting"
+    // and disables sending until it appears. pi's runtime lives in this process,
+    // so it is ready the moment a snapshot exists.
+    runtimeInitialization: { status: "ready" as const, attemptId: `${view.sessionId}-1` },
+
     control: {
       phase: view.phase,
       sessionEnded: isEnded(view.phase),
