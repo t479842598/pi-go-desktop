@@ -1,130 +1,128 @@
-# pi-zcode
+# pi-zcode 交接
 
-ZCode 的界面，pi 的引擎。
+ZCode 的界面，pi 的引擎。fork 自 `zcode-selfhost/upstream`（ZCode 3.16.2）。
 
-这个仓库 fork 自 `zcode-selfhost/upstream`（ZCode 3.16.2），目标是换掉 ZCode 的 agent
-后端，改由 `@earendil-works/pi-coding-agent` 驱动，同时保留 ZCode 的全部界面与交互。
+## 一句话状态
 
-## 当前进度
+**协议层完全打通，UI 完整渲染，但"从界面点发送"仍未跑通。** 卡点已精确定位到 ZCode
+composer 的提交门禁，不是 pi 侧的问题。
 
-### 已跑通并验证
+验证方式：`PI_ENGINE=pi PORT=3030 tsx packages/server/src/entry-http.ts` 起服务，
+界面完整加载，侧栏列出 pi 的会话与项目，模型选择器显示 `deepseek/deepseek-flash`。
 
-```
-PI_ENGINE=pi PORT=3030 tsx packages/server/src/entry-http.ts
-```
+## 已确认可用（不要重复验证）
 
-用这个命令启动后，**ZCode 的 Web 界面会完整渲染**（侧栏、项目、会话列表、命令面板），
-并且界面发出的 RPC 全部落到 pi 实现上。
-
-| 能力 | 状态 |
+| 环节 | 证据 |
 | --- | --- |
-| ZCode UI 渲染 | ✅ 完整界面，无白屏 |
-| RPC 握手（hello/initialize） | ✅ 通过官方 Zod 校验 |
-| 会话订阅 + snapshot 帧 | ✅ 合法帧送达 UI |
-| 会话列表（sessions-index） | ✅ 侧栏可见 |
-| 模型列表 | ✅ 10 个 provider / 100 个模型 |
-| 工作区准备 | ✅ readWorkspacePresentation |
-| 真实模型流式输出 | ✅ 21 帧（经 WebSocket 直连验证） |
-| **从 UI 点发送走完整条链路** | ❌ **未打通**，见下 |
+| RPC 握手 | `hello` / `initialize` 通过官方 Zod |
+| 会话订阅 | `acknowledged` + `activated`，无 fault |
+| snapshot 帧 | wire 格式合法，UI 应用成功 |
+| 会话列表 | 侧栏可见 pi 目录派生的项目 |
+| 模型列表 | 10 providers / 100 models，`effectiveSelection` 生效 |
+| 工作区准备 | `readWorkspacePresentation` 不再阻塞 |
+| 引擎本身 | 直连 RPC 发消息，21 帧流式输出 |
+| 单元测试 | 12/12 通过，`tsc` 零错误 |
 
-### 未打通的一环
+## 卡点：composer 提交门禁
 
-从界面发消息目前走不通。已定位到具体位置：
+`sendConversationCommandV4` 收得到 `createSession` / `setFollowupMode` / `deleteSession`，
+但**从不收到 `sendText`**。发送按钮存在（`v4-composer-send`）且持续 `disabled: true`，
+20 秒轮询无变化。
 
-选中工作区后，ZCode 会弹出 **“选择文件夹”对话框**（`virtual-project-browse`），
-它遮住输入框，用户无法完成一次正常发送。这个对话框是 UI 在拿不到可用项目数据时的
-退路——真正的解法是让 **`projectService`** 对 pi 生效。
+已排除的假设：
 
-也就是说：**消息链路本身是通的（21 帧流式输出已证明），但 UI 的“进入可会话状态”这一
-前置条件还没满足。**
+- ~~模型列表为空~~ —— `effectiveConfig` 已变为 `{provider: deepseek, model: deepseek-flash}`
+- ~~wire 帧格式错误~~ —— 已修复，订阅正常
+- ~~phase 报 running~~ —— 已改为 idle，停止按钮已变回发送按钮
+- ~~sessionId 传递丢失~~ —— 已从 `envelope.sessionId` 读取，命令带上了正确 id
 
-## 为什么这样做
+剩余候选（未验证）：
 
-ZCode 的服务端通过一个唯一的注入点产出 `IServiceAccessor`：
+1. `submissionReady` —— composer 内部状态，来源未追踪到
+2. 草稿会话每 ~8 秒重建一次，可能在提交落地前重置 composer
+   （时序：`createSession` ×2 → `deleteSession` ×1 → 循环）
+3. `attachmentsReady` —— `attachmentsApi.hasUnreadyAttachments`
+
+**注意**：`disabled` 与 `canSend` 是两个独立条件。`disabled` 来自 `SessionPane`
+传入的 `connecting || draftRuntimeRebuilding || queueEditActive || quotaBanner.blocksSubmit`；
+`canSend` 来自 composer 内部。当前 `disabled: true` 说明是**前者**，不是 composer 内部。
+
+下一步应从 `SessionPane.tsx:5443` 的 `disabled` 表达式入手，逐个排除那四个因子。
+`draftRuntimeRebuilding` 最可疑，因为它与观察到的 8 秒重建循环吻合。
+
+## 一轮里修掉的 10 个真实缺陷
+
+全部是运行真实 UI 才暴露的，单测看不见。按发现顺序：
+
+1. **未知 RPC 成员杀死整个进程** —— `ProxyChannel` 在 channel server 内抛异常无人捕获，
+   UI 挂载订阅十几个 `onDynamic*`。`withServiceFallbacks()` 兜底。
+2. **动态事件与普通事件元数不同** —— `onDynamicXxx(p)` 返回 Event 再传 listener（两次调用）；
+   `onXxx` 本身是 Event（一次）。弄反得 `source is not a function`。
+3. **命令名在 `envelope.type`** —— 不在 `payload.type`。读错让所有命令看起来是 undefined。
+4. **`createSession` 的 id 在 `result.sessionId`** —— 顶层 `message` 被忽略，UI 无限重试。
+5. **远端存储身份让 `prepareSession` 强要 projectId** —— `PI_ENGINE=pi` 时不传
+   `projectStorageHostId`。
+6. **`readWorkspacePresentation` 失败会 throw** —— 工作区准备中断，composer 永久 connecting。
+7. **`runtimeInitialization` 缺失被判为未就绪** —— snapshot 必须显式给 `{status: "ready"}`。
+8. **帧必须是 wire 格式** —— `onDynamicConversationFrame` 载的是 `...WireCandidate`；
+   裸帧被判为 invalid payload → content fault → 丢弃草稿绑定。
+9. **命令目标是 `envelope.sessionId`** —— 外层 `params.sessionId` 恒为 null。
+10. **新会话是 idle 不是 running** —— phase 错报让 composer 显示停止按钮而非发送按钮。
+
+另外两个形状错误（会让 UI 丢弃整个 model view）：
+
+11. `optionSpecs.*.map` 是 CEL 表达式**字符串**，不是对象。
+12. `providerName` 是普通 id 字符串，不是本地化 map。
+
+## 代码地图
 
 ```
-createLocalServices() / createServerHostServices()   ← 唯一的组装点
-        ↓
-   ServiceCollection.register(descriptor, instance)   ← Map.set，同名即覆盖
-        ↓
-   ProxyChannel.fromService(instance)   ← 自动把对象方法映射为 RPC
-        ↓
-   ChannelServer / MessagePort / WebSocket / relay
+packages/pi-runtime/src/
+  session-host.ts              活会话注册表
+  session-locator.ts           UUID → 文件 + cwd
+  session-list.ts              会话摘要扫描（头尾有界读）
+  session-service.ts           readWorkspacePresentation
+  project-service.ts           项目由会话目录派生
+  model-selection.ts           pi 模型 → ZCode view
+  service-fallbacks.ts         缺失成员兜底（事件返回空订阅）
+  v4/
+    projection.ts              pi 消息 → ZCode row
+    snapshot.ts                snapshot 构造（宽对象，字段多）
+    session-view.ts            会话状态适配
+    frames.ts                  裸帧 + wire 包装
+    conversation-projection.ts 事件桥 + 订阅生命周期
+    pi-agent-service.ts        IZCodeAgentService 的 v4 面
 ```
 
-所以换后端不改 UI，也不碰 `@zcode/rpc` 的二进制协议。用 `PI_ENGINE=pi` 时，
-`mountPiAgentService()` 把 `zcode-agent`、`model-selection`、`zcode-session` 三个通道
-换成 pi 实现，其余保持 ZCode 原样。
+装配点：`packages/services/src/node.ts` 的 `mountPiAgentService()`，
+`PI_ENGINE=pi` 时替换 `zcode-agent` / `model-selection` / `zcode-session` / `project` 四个通道。
 
-**不动的三层**（省掉协议翻译层的前提）：
-
-1. `@zcode/rpc` —— VQL 序列化 + 13 字节帧头，原样复用
-2. `@zcode/ui` —— 40 万行界面，一行不改
-3. relay 的分片与 ACK —— 远程控制零改动复用
-
-## 踩过的坑（都在代码注释里）
-
-这些是运行真实 UI 才暴露的，单测看不见：
-
-1. **未知 RPC 成员会杀死整个进程**，不是让单次调用失败。`ProxyChannel` 在 channel
-   server 内部抛异常且无人捕获，而 UI 挂载时要订阅十几个 `onDynamic*` 事件。
-   `withServiceFallbacks()` 兜住它们；方法仍然明确拒绝，让缺口可见。
-2. **动态事件与普通事件元数不同**。`onDynamicXxx(param)` 返回一个 `Event`，再传 listener
-   调用（两次调用）；`onXxx` 本身就是 `Event`（一次调用）。弄反会得到
-   `source is not a function`。
-3. **命令名在 `envelope.type`，不在 `payload.type`**。读错字段让所有命令看起来是
-   undefined，`createSession` 永远拿不到会话 id，UI 无限重试却从不发消息。
-4. **`createSession` 的 ACK 要从 `result.sessionId` 取**，顶层 `message` 会被忽略。
-5. **远端存储身份会让 `prepareSession` 强要 projectId**（`project.remote-project-required`）。
-   pi 引擎工作在普通本地目录，所以 `PI_ENGINE=pi` 时不传 `projectStorageHostId`。
-6. **`readWorkspacePresentation` 失败会 throw**，整个工作区准备流程中断，composer
-   永远停在 connecting。
-
-## 协议映射
-
-| pi | ZCode row |
-| --- | --- |
-| user message | `userInput` |
-| assistant text block | `assistantText` |
-| thinking block | `reasoning` |
-| toolCall block | `toolCall` |
-| toolResult message | 同一个 `toolCall` 行，回填输出 |
-| `Agent` 工具调用 | `subagent`（独立行） |
-
-一次 prompt = 一个 `turnHeader`，`agent_end` 关闭它。
-pi 没有消息 id，投影按 `role:timestamp` 派生稳定 key，流式文本走 `row.delta` 只发增量。
-
-## 验证方式
+## 开发命令
 
 ```bash
-# 单元测试（12 个，含官方 Zod 契约校验）
-fnm exec --using=24.18.0 npx tsx --test packages/pi-runtime/src/v4/*.test.ts
+# 依赖（Node >= 24，.nvmrc）
+fnm exec --using=24.18.0 pnpm install
 
-# 类型检查
+# 测试 + 类型
+fnm exec --using=24.18.0 npx tsx --test packages/pi-runtime/src/v4/*.test.ts
 fnm exec --using=24.18.0 npx tsc --noEmit -p packages/pi-runtime/tsconfig.json
 
-# 真实链路冒烟（需要先起 server）
-PI_ENGINE=pi PORT=3030 tsx packages/server/src/entry-http.ts
-PORT=3030 SMOKE_TEXT="say hi" tsx packages/pi-runtime/src/smoke/ws-smoke.ts
+# 起服务（3030 便于 Vite 默认代理）
+PI_ENGINE=pi PORT=3030 fnm exec --using=24.18.0 npx tsx packages/server/src/entry-http.ts
+
+# 前端
+cd packages/web && npx vite --port 5199
+
+# UI 验收（playwright 在兄弟仓库 pi-web-QT 里）
+cd ../pi-web-QT && NODE_PATH=$PWD/node_modules node <脚本路径>
 ```
 
-注意：仓库要求 Node >= 24（`.nvmrc`），系统 Node 22 过不了引擎检查。
+## 剩余工作
 
-## 下一步
-
-**最近的下一步是 `projectService`**，它解锁“从 UI 发送”这最后一环：
-
-1. `projectService`：(a) 让工作区选择返回 pi 的项目而非弹“选择文件夹”；(b) 让
-   `prepareSession` 给出可用的草稿目录
-2. `zcodeTaskService`：侧栏任务列表（目前显示的是 ZCode 自己的历史记录）
-3. 之后才是 P1–P6（会话全功能、外围面板、主题桥接、Electron 壳、远程中继、裁剪发布）
-
-## 已知空缺
-
-- 只有 `zcode-agent` / `model-selection` / `zcode-session` 三个通道是 pi 的，其余 55 个
-  通道未注册，调用会抛 `Service not implemented by the pi host yet`
-- workflow / plan / fileRewind 系列返回空（pi 没有对应概念，只读无状态查询，空是合法答复）
-- 附件上传未实现
-- 队列只在内存，host 重启即丢（pi-web 用侧车文件解决过，需要移植）
-- fork 未接线。注意 pi-web 踩过的坑：`fork()` 原地改会话状态，fork 后必须立刻销毁旧
-  wrapper，否则后续 fork 会产出损坏的 parentSession 链
+- **A（当前）** composer 门禁 — 见上文候选
+- **B** 会话全功能：分支 fork/navigate、队列持久化、审批、子代理
+- **C** 设置面板：provider 配置、插件、skills、MCP
+- **D** 主题桥接：pi 25 套 → ZCode 语义 token
+- **E** Electron 壳：Win + macOS
+- **F** 远程：桌面 device + 自建 relay（用 v1 HMAC，不是 v2）
+- **G** 裁剪 ZCode 专有入口 + 许可合规 + 发版
