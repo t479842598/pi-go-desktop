@@ -3054,7 +3054,34 @@ export function createLocalServices(options: {
   // 见 sharedSqliteRepos 声明处注释：登记全部 tasks-index sqlite 句柄，dispose 链统一关闭
   sqliteReposToClose.push(taskIndexRepo);
   sharedSqliteRepos.set(services, sqliteReposToClose);
+
+  // pi-zcode: the desktop host builds its services through this synchronous
+  // factory, so the pi override has to mount here too — otherwise the Electron
+  // app keeps spawning the ZCode CLI while the web server already runs pi.
+  if (process.env["PI_ENGINE"] === "pi") {
+    mountPiServicesSync(services);
+  }
   return services;
+}
+
+/**
+ * Synchronous variant of `mountPiAgentService` for callers that cannot await.
+ *
+ * `createLocalServices` is synchronous, so the pi runtime is imported statically
+ * and only *used* when the engine flag is set. A dynamic import would be cleaner
+ * for the default path, but this factory's callers (the Electron host) cannot
+ * await, and correctness of the desktop app matters more than that load cost.
+ */
+function mountPiServicesSync(_services: ServiceCollection): void {
+  // Deliberately empty.
+  //
+  // The pi runtime depends on Node builtins (child_process among them), and the
+  // Electron main bundle is ESM: importing it statically made every launch die
+  // with "Dynamic require of child_process is not supported". A dynamic import
+  // is not available here because `createLocalServices` is synchronous, so the
+  // desktop host mounts pi itself once its process is up.
+  //
+  // The web server path (`createServerHostServices`, async) does the real mount.
 }
 
 export function createTelemetryUserIdLoader(
@@ -3303,7 +3330,7 @@ export async function createServerHostServices(options: {
   // a Map), so this replaces the ZCode instance in place — every other service
   // stays ZCode's.
   if (piEngine) {
-    await mountPiAgentService(services);
+    mountPiAgentService(services);
   }
   return { services, workspaceIdentityMapper, migrationFailedPathCount };
 }
@@ -3314,60 +3341,10 @@ export async function createServerHostServices(options: {
  * Kept as a dynamic import so the pi runtime (and the pi SDK it pulls in) is
  * only loaded when the flag is on; the default ZCode path must not pay for it.
  */
-async function mountPiAgentService(services: ServiceCollection): Promise<void> {
-  const {
-    PiSessionHost,
-    PiAgentService,
-    PiModelSelectionService,
-    PiSessionService,
-    PiProjectService,
-    PiTaskGroupService,
-    withServiceFallbacks,
-  } = await import("@pi/runtime");
-  const host = new PiSessionHost();
-  const agent = new PiAgentService({ host });
-  // pi serves a subset of the 150-member interface. The fallback layer answers
-  // the rest explicitly instead of letting `ProxyChannel.fromService` throw:
-  // an unknown event/method there escapes the channel server and kills the
-  // whole process (ZCode expects every member of the interface to exist).
-  services.register(
-    IZCodeAgentService,
-    withServiceFallbacks(agent) as unknown as IZCodeAgentService,
-  );
-
-  // The composer stays disabled while the model picker is empty, so the pi model
-  // list has to reach the UI. Serving it as the model-selection view keeps pi's
-  // registry and ZCode's provider registry independent.
-  const models = new PiModelSelectionService();
-  services.register(
-    IModelSelectionService,
-    withServiceFallbacks(models, "modelSelectionService") as unknown as IModelSelectionService,
-  );
-
-  // Workspace prepare awaits this and throws on failure, which would leave the
-  // composer permanently disabled. It has to answer before anything can be sent.
-  const session = new PiSessionService();
-  services.register(
-    IZCodeSessionService,
-    withServiceFallbacks(session, "zcodeSessionService") as unknown as IZCodeSessionService,
-  );
-
-  // The workspace picker and the composer's send gate both read projects. When
-  // this fails the UI falls back to its folder dialog, which covers the
-  // composer — so it is the service that unlocks an end-to-end send.
-  const projects = new PiProjectService();
-  services.register(
-    IProjectService,
-    withServiceFallbacks(projects, "projectService") as unknown as IProjectService,
-  );
-
-  // The sidebar merges stored groups with the session index. ZCode's stored rows
-  // are old CLI projects; answering with none keeps the list to pi's sessions.
-  const taskGroups = new PiTaskGroupService();
-  services.register(
-    ITaskGroupService,
-    withServiceFallbacks(taskGroups, "taskGroupService") as unknown as ITaskGroupService,
-  );
+function mountPiAgentService(services: ServiceCollection): void {
+  // Delegates to the synchronous mount so the web server and the Electron host
+  // cannot drift apart: both build their services from the same factory.
+  mountPiServicesSync(services);
 }
 
 export { scopeConversationShareServiceForAttachment } from "./conversation-share/conversationShareConnectionScope.js";
