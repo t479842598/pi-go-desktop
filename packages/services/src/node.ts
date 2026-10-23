@@ -3055,12 +3055,8 @@ export function createLocalServices(options: {
   sqliteReposToClose.push(taskIndexRepo);
   sharedSqliteRepos.set(services, sqliteReposToClose);
 
-  // pi-zcode: the desktop host builds its services through this synchronous
-  // factory, so the pi override has to mount here too — otherwise the Electron
-  // app keeps spawning the ZCode CLI while the web server already runs pi.
-  if (process.env["PI_ENGINE"] === "pi") {
-    mountPiServicesSync(services);
-  }
+  // The pi override mounts in the host process, not here: this factory is
+  // synchronous and importing pi would break the ESM Electron bundle.
   return services;
 }
 
@@ -3072,18 +3068,6 @@ export function createLocalServices(options: {
  * for the default path, but this factory's callers (the Electron host) cannot
  * await, and correctness of the desktop app matters more than that load cost.
  */
-function mountPiServicesSync(_services: ServiceCollection): void {
-  // Deliberately empty.
-  //
-  // The pi runtime depends on Node builtins (child_process among them), and the
-  // Electron main bundle is ESM: importing it statically made every launch die
-  // with "Dynamic require of child_process is not supported". A dynamic import
-  // is not available here because `createLocalServices` is synchronous, so the
-  // desktop host mounts pi itself once its process is up.
-  //
-  // The web server path (`createServerHostServices`, async) does the real mount.
-}
-
 export function createTelemetryUserIdLoader(
   credentialService: Pick<ICredentialService, "load">,
 ): () => Promise<string> {
@@ -3330,7 +3314,7 @@ export async function createServerHostServices(options: {
   // a Map), so this replaces the ZCode instance in place — every other service
   // stays ZCode's.
   if (piEngine) {
-    mountPiAgentService(services);
+    await mountPiAgentService(services);
   }
   return { services, workspaceIdentityMapper, migrationFailedPathCount };
 }
@@ -3341,10 +3325,13 @@ export async function createServerHostServices(options: {
  * Kept as a dynamic import so the pi runtime (and the pi SDK it pulls in) is
  * only loaded when the flag is on; the default ZCode path must not pay for it.
  */
-function mountPiAgentService(services: ServiceCollection): void {
-  // Delegates to the synchronous mount so the web server and the Electron host
-  // cannot drift apart: both build their services from the same factory.
-  mountPiServicesSync(services);
+async function mountPiAgentService(services: ServiceCollection): Promise<void> {
+  // Dynamic import on purpose: this factory serves the web server, whose bundle
+  // is ESM. Importing the pi runtime statically pulls its Node builtins into that
+  // bundle and the Electron main process dies at load ("Dynamic require of
+  // child_process"), so the module is loaded only when the flag is set.
+  const { mountPiServices } = await import("@pi/runtime");
+  mountPiServices(services);
 }
 
 export { scopeConversationShareServiceForAttachment } from "./conversation-share/conversationShareConnectionScope.js";

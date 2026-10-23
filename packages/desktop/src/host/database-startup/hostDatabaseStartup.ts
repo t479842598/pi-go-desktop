@@ -43,6 +43,17 @@ export function createHostDatabaseStartup(options: {
         coordinator.updateDisk(currentSampler.snapshot());
       };
       try {
+        // pi-zcode: the pi engine keeps sessions as JSONL and has no database to
+        // prepare. The preparation below spawns ZCode's own CLI
+        // (`app-server --prepare-storage`), which does not exist under this
+        // engine, and its absence surfaced as a blocking
+        // `unsupported_runtime` startup failure. Skipping straight to service
+        // initialization is the honest answer: there is nothing to migrate.
+        if (process.env["PI_ENGINE"] === "pi") {
+          report("starting_services");
+          await options.initializeServices();
+          return;
+        }
         report("preparing_host_storage", "checking");
         const tasksPath = getTasksIndexDatabasePath();
         await observePath(tasksPath);

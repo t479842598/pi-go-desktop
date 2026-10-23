@@ -4010,6 +4010,16 @@ parentPort.on("message", async (e: Electron.MessageEvent) => {
             return initializedServices;
           },
         });
+        // pi-zcode: swap the conversation channels for the pi runtime. This runs
+        // in the host process, after the service owner is established, because
+        // the owner callback is synchronous while loading pi needs a dynamic
+        // import — and importing it inside createLocalServices pulled pi's Node
+        // builtins into the ESM main bundle, where every launch failed with
+        // "Dynamic require of child_process".
+        if (process.env["PI_ENGINE"] === "pi") {
+          const { mountPiServices } = await import("@pi/runtime");
+          mountPiServices(services);
+        }
         // 自建中继：让手机端（zcode.tang74.top/remote/v4）远程操控本机 Host。
         // 远程控制是可选能力，失败只记日志，绝不阻断本地启动。
         // 工作区名单取 main 传下来的 agentWarmupTargets（按最近使用排序，最多 3 个）；

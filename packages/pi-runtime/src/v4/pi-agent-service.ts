@@ -66,6 +66,10 @@ export class PiAgentService {
   private readonly indexSubscriptions = new Map<string, string>();
   private readonly frameEmitter = new Emitter<unknown>();
   private readonly ttftEmitter = new Emitter<unknown>();
+  /** Storage-startup fan-out; pi reports ready once and never changes. */
+  private readonly storageEmitter = new Emitter<unknown>();
+  /** Monotonic counter the storage snapshot's `generation`/`sequence` require. */
+  private storageGeneration = 0;
   private readonly connectionId = randomUUID();
   /** Revision the service reports in command ACKs; monotonic per connection. */
   private revision = 0;
@@ -104,6 +108,41 @@ export class PiAgentService {
 
   /** pi has nothing to negotiate; the client hello is accepted as-is. */
   async initializeConversationV4(_clientHello: ClientHello): Promise<void> {}
+
+  // ── storage startup ──────────────────────────────────────────────────────
+
+  /**
+   * Storage preparation.
+   *
+   * The desktop app refuses to open unless the configured agent can prepare its
+   * own storage; without this it stops at "the configured Agent does not support
+   * standalone storage preparation". pi keeps sessions as JSONL files and has no
+   * database to migrate, so preparing is a no-op and the state reports ready.
+   */
+  async prepareStorage(_params: unknown): Promise<void> {}
+
+  async getStorageStartupState(_params: unknown): Promise<{
+    generation: number;
+    state: Record<string, unknown>;
+  }> {
+    this.storageGeneration += 1;
+    return {
+      generation: this.storageGeneration,
+      state: {
+        schemaVersion: 1 as const,
+        attemptId: `pi-storage-${this.storageGeneration}`,
+        sequence: this.storageGeneration,
+        databaseId: "pi-sessions",
+        databaseKind: "session" as const,
+        phase: "ready" as const,
+        elapsedMs: 0,
+      },
+    };
+  }
+
+  onDynamicStorageStartupState(_params: unknown): Event<unknown> {
+    return this.storageEmitter.event;
+  }
 
   // ── conversation subscription ────────────────────────────────────────────
 
@@ -558,6 +597,7 @@ export class PiAgentService {
     this.host.closeAll();
     this.frameEmitter.dispose();
     this.ttftEmitter.dispose();
+    this.storageEmitter.dispose();
   }
 
   // ── internals ────────────────────────────────────────────────────────────

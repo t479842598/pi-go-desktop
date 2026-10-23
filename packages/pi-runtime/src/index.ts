@@ -5,6 +5,7 @@ export * from "./session-service.js";
 export * from "./project-service.js";
 export * from "./task-group-service.js";
 export * from "./service-fallbacks.js";
+export * from "./mount.js";
 export * from "./model-selection.js";
 export * from "./v4/projection.js";
 export * from "./v4/snapshot.js";

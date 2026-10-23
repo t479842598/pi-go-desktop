@@ -6,10 +6,13 @@
     "#src/*": "./src/*"
   },
   "exports": {
-    ".": "./src/index.ts",
-    "./node": "./src/node.ts"
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
   },
   "scripts": {
+    "build": "tsc -b",
     "lint": "oxlint"
   },
   "dependencies": {
@@ -25,5 +28,8 @@
   "devDependencies": {
     "@types/node": "^25.5.0",
     "typescript": "^6.0.2"
-  }
+  },
+  "files": [
+    "dist"
+  ]
 }

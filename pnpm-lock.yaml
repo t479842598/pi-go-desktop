@@ -934,6 +934,9 @@ importers:
       '@opentelemetry/sdk-trace-base':
         specifier: 2.6.1
         version: 2.6.1(@opentelemetry/api@1.9.1)
+      '@pi/runtime':
+        specifier: workspace:*
+        version: link:../pi-runtime
       '@zcode/client':
         specifier: workspace:*
         version: link:../client

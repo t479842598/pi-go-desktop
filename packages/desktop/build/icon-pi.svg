@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <!--
+    PI application icon.
+
+    Rounded square in the app's dark surface colour, with the π glyph drawn as
+    strokes rather than text: no font is available at raster time, and a stroked
+    path stays legible at 16px where a letterform would smear.
+  -->
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#26282c"/>
+      <stop offset="100%" stop-color="#161719"/>
+    </linearGradient>
+    <linearGradient id="glyph" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#f4f5f7"/>
+      <stop offset="100%" stop-color="#c9ccd3"/>
+    </linearGradient>
+  </defs>
+
+  <rect x="0" y="0" width="1024" height="1024" rx="228" fill="url(#bg)"/>
+  <rect x="8" y="8" width="1008" height="1008" rx="222" fill="none"
+        stroke="#3a3d43" stroke-width="4"/>
+
+  <!-- horizontal bar of the pi -->
+  <path d="M232 340 H792" stroke="url(#glyph)" stroke-width="64"
+        stroke-linecap="round" fill="none"/>
+  <!-- left leg -->
+  <path d="M356 340 V688" stroke="url(#glyph)" stroke-width="64"
+        stroke-linecap="round" fill="none"/>
+  <!-- right leg with the characteristic curve -->
+  <path d="M636 340 V620 Q636 712 726 712" stroke="url(#glyph)" stroke-width="64"
+        stroke-linecap="round" fill="none"/>
+</svg>
