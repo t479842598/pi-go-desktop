@@ -4,6 +4,9 @@
 @import "shadcn/tailwind.css";
 @import "@xterm/xterm/css/xterm.css";
 @import "katex/dist/katex.min.css";
+/* pi-web theme sets, generated from its JSON by scripts/generate-pi-themes.mjs.
+   Imported after the base tokens so `html[data-pi-theme]` overrides them. */
+@import "./pi-themes.css";
 @import "./highspeed/highspeed-activation.css";
 @import "./highspeed/highspeed-share.css";
 @source "../../../node_modules/streamdown/dist/*.js"; /* 感觉这行也是不好使呢*/
