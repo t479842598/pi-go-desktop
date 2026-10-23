@@ -30,6 +30,14 @@ export interface PiSessionHandle {
   readonly cwd: string;
   /** The live SDK session. Prefer {@link PiSessionHost} commands over this. */
   readonly session: AgentSession;
+  /**
+   * The manager behind the session.
+   *
+   * Needed for operations that rewrite history rather than talk to the model —
+   * `createBranchedSession` for forking, and the entry lookups a branch switch
+   * uses. `AgentSession` exposes none of that.
+   */
+  readonly sessionManager: SessionManager;
   subscribe(listener: PiEventListener): () => void;
   /** Drop this session from the host. Safe to call twice. */
   dispose(): void;
@@ -82,7 +90,7 @@ export class PiSessionHost {
       : SessionManager.create(cwd, this.options.sessionDir);
 
     const { session } = await createAgentSessionFromServices({ services, sessionManager });
-    return this.adopt(session, cwd);
+    return this.adopt(session, cwd, sessionManager);
   }
 
   /** Look up a live handle without creating one. */
@@ -121,7 +129,7 @@ export class PiSessionHost {
     for (const id of [...this.entries.keys()]) this.close(id);
   }
 
-  private adopt(session: AgentSession, cwd: string): PiSessionHandle {
+  private adopt(session: AgentSession, cwd: string, sessionManager: SessionManager): PiSessionHandle {
     const sessionId = session.sessionId;
 
     // A stale entry for the same id means the caller reopened from disk while
@@ -155,6 +163,7 @@ export class PiSessionHost {
       sessionId,
       cwd,
       session,
+      sessionManager,
       subscribe(listener) {
         listeners.add(listener);
         return () => {

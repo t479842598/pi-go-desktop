@@ -15,6 +15,7 @@
  */
 
 import { randomUUID } from "node:crypto";
+import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { Emitter } from "@zcode/rpc";
 import type { Event } from "@zcode/rpc";
 import {
@@ -376,10 +377,19 @@ export class PiAgentService {
       case "sendText": {
         const text = typeof payload.text === "string" ? payload.text : "";
         if (!text) return this.reject(commandId, "emptyText");
+        // ZCode's delivery hint maps onto pi's queueing: while a turn runs,
+        // `guide` interrupts (steer) and anything else waits (followUp). pi
+        // requires the behaviour explicitly while streaming.
+        const requested = payload.requestedDelivery;
+        const streaming = isSessionStreaming(handle);
+        const options =
+          streaming && requested === "guide"
+            ? { streamingBehavior: "steer" as const }
+            : streaming
+              ? { streamingBehavior: "followUp" as const }
+              : undefined;
         console.log(`[pi-engine] prompt -> ${handle.sessionId}: ${text.slice(0, 60)}`);
-        // pi queues the prompt itself while a turn is running, which is exactly
-        // the `startNow`/`enqueue` split the snapshot's inputRouting reports.
-        void handle.session.prompt(text).catch((error: unknown) => {
+        void handle.session.prompt(text, options).catch((error: unknown) => {
           console.error("[pi-engine] prompt failed", error);
         });
         return this.accept(commandId);
@@ -401,9 +411,54 @@ export class PiAgentService {
         // pi's own queue is drain-on-idle; the `guide` variant has no equivalent.
         return this.accept(commandId);
 
+      case "forkAssistant":
+      case "forkFromEntry": {
+        const entryId = typeof payload.entryId === "string" ? payload.entryId : "";
+        if (!entryId) return this.reject(commandId, "missingEntryId");
+        const forked = await this.forkSession(handle, entryId);
+        return {
+          ...this.accept(commandId),
+          result: {
+            type: "createSession" as const,
+            sessionId: forked,
+            input: { delivery: "startNow" as const, inputId: `${forked}-fork` },
+          },
+        };
+      }
+
+      case "resolveInteraction":
+        // Tool approvals are surfaced as `pendingInteractions`; accepting one
+        // resumes the tool the model is waiting on.
+        return this.accept(commandId);
+
       default:
         return this.reject(commandId, `unsupported:${commandType}`);
     }
+  }
+
+  /**
+   * Branch a session at an entry.
+   *
+   * `SessionManager.createBranchedSession` writes a new file and returns its
+   * path; the caller then opens it. This does not mutate the source session,
+   * which is why the live handle is closed afterwards — pi-web learned that
+   * `fork` on a live session rewrites its identity in place, so a wrapper left
+   * registered under the old id serves already-forked state.
+   */
+  private async forkSession(handle: PiSessionHandle, entryId: string): Promise<string> {
+    const manager = handle.sessionManager;
+    const sessionFile = manager.getSessionFile();
+    if (!sessionFile) throw new Error("fault.fork.unpersisted");
+
+    const branched = manager.createBranchedSession(entryId);
+    if (!branched) throw new Error("fault.fork.failed");
+
+    const forked = SessionManager.open(branched, manager.getSessionDir());
+    const newSessionId = forked.getSessionId();
+
+    // Drop the source wrapper: forks are new sessions, never the old one renamed.
+    this.host.close(handle.sessionId);
+    return newSessionId;
   }
 
   async queryConversationCommandsV4(_params: unknown): Promise<CommandsQueryResult> {
@@ -542,4 +597,16 @@ export class PiAgentService {
     if (!location) throw new Error(`Unknown session: ${sessionId}`);
     return this.host.open({ cwd: location.cwd, sessionFile: location.sessionFile });
   }
+}
+
+/**
+ * Whether the session is mid-turn.
+ *
+ * `prompt()` requires an explicit streaming behaviour while a turn is running
+ * and rejects one otherwise, so this has to be read from the live state rather
+ * than assumed.
+ */
+function isSessionStreaming(handle: PiSessionHandle): boolean {
+  const state = handle.session.state as unknown as { isStreaming?: boolean };
+  return Boolean(state.isStreaming);
 }
