@@ -1,0 +1,28 @@
+{
+  "name": "@pi/runtime",
+  "private": true,
+  "type": "module",
+  "imports": {
+    "#src/*": "./src/*"
+  },
+  "exports": {
+    ".": "./src/index.ts",
+    "./node": "./src/node.ts"
+  },
+  "scripts": {
+    "lint": "oxlint"
+  },
+  "dependencies": {
+    "@earendil-works/pi-agent-core": "0.87.1",
+    "@earendil-works/pi-ai": "0.87.1",
+    "@earendil-works/pi-coding-agent": "0.87.1",
+    "@zcode/shared": "workspace:*",
+    "zod": "4.6.5",
+    "@zcode/rpc": "workspace:*",
+    "@zcode/services": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^25.5.0",
+    "typescript": "^6.0.2"
+  }
+}

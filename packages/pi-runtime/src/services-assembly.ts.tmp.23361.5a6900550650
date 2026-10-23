@@ -1,0 +1,60 @@
+/**
+ * pi-backed service assembly.
+ *
+ * ZCode's whole UI talks to the host through `ServiceCollection` →
+ * `exposeOnChannelServer` → `ProxyChannel.fromService`. That makes the service
+ * collection the single injection point: register pi implementations here and
+ * the UI needs no changes at all.
+ *
+ * This module builds that collection. Everything pi cannot serve is registered
+ * as an explicitly unsupported service so a stray call fails with a named error
+ * instead of "service not registered" (which looks like a wiring bug).
+ */
+
+import { IZCodeAgentService, ServiceCollection } from "@zcode/services";
+
+import { PiSessionHost } from "./session-host.js";
+import { PiAgentService } from "./v4/pi-agent-service.js";
+
+export interface PiServiceAssemblyOptions {
+  /** Live pi sessions shared by every pi-backed service. */
+  host?: PiSessionHost;
+  sessionDir?: string;
+  /** Workspace root used when a session has to be created without one. */
+  defaultCwd?: string;
+}
+
+export interface PiServiceAssembly {
+  collection: ServiceCollection;
+  agent: PiAgentService;
+  host: PiSessionHost;
+  dispose(): Promise<void>;
+}
+
+/**
+ * Build the pi service collection.
+ *
+ * Only `zcode-agent` is live today. The rest of the 58 channels are left
+ * unregistered on purpose: `ServiceCollection.get()` throws a named error for a
+ * missing channel, which surfaces the gap at the call site rather than hiding
+ * it behind a stub that returns plausible-looking empty data.
+ */
+export function createPiServices(options: PiServiceAssemblyOptions = {}): PiServiceAssembly {
+  const host = options.host ?? new PiSessionHost({ sessionDir: options.sessionDir });
+  const agent = new PiAgentService({ host });
+  const collection = new ServiceCollection();
+
+  // The descriptor's channel name is "zcode-agent"; registration is by name, so
+  // the UI's existing `getChannel(IZCodeAgentService.channelName)` resolves to
+  // the pi implementation without touching `RemoteServiceAccess`.
+  collection.register(IZCodeAgentService, agent as unknown as typeof IZCodeAgentService);
+
+  return {
+    collection,
+    agent,
+    host,
+    async dispose() {
+      await agent.dispose();
+    },
+  };
+}
