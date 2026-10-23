@@ -39,7 +39,15 @@ export interface ProjectedRow {
 export type ProjectedDelta =
   | { op: "row.appended"; row: ProjectedRow }
   | { op: "row.upserted"; row: ProjectedRow }
-  | { op: "row.delta"; rowId: number; path: string; append: string };
+  | { op: "row.delta"; rowId: number; path: string; append: string }
+  /**
+   * A session-state change with no row impact (phase, approvals, retry, title).
+   *
+   * These live in the snapshot's control/config blocks, and the UI reads the
+   * whole snapshot for them. An empty patch keeps the stream sequence legal —
+   * re-sending a snapshot mid-stream is rejected as a metadata mismatch.
+   */
+  | { op: "state.updated"; patch: Record<string, unknown> };
 
 export interface ProjectionState {
   /** Monotonic row id, never reused — matches ZCode's generator contract. */
@@ -140,7 +148,11 @@ function growText(state: ProjectionState, rowId: number, next: string): Projecte
   state.textByRow.set(rowId, next);
   if (next.startsWith(previous)) {
     const append = next.slice(previous.length);
-    return append ? [{ op: "row.delta", rowId, path: "+./text", append }] : [];
+    // `path` is a closed enum — "text" | "inputText" | "output.text" |
+    // "summaryText" — not a JSON pointer. A pointer form fails the frame schema,
+    // and the assembler then rejects the whole frame as an invalid payload, which
+    // silently drops every streamed character.
+    return append ? [{ op: "row.delta", rowId, path: "text", append }] : [];
   }
   const row = state.rows.get(rowId);
   if (!row) return [];

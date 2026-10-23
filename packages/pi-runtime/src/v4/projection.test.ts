@@ -167,6 +167,6 @@ test("streaming text grows by row.delta, not by re-sending the row", () => {
   assert.equal(first[0]?.op, "row.appended");
   // rowId 1 is the turn header opened by beginTurn; the text row is 2.
   assert.deepEqual(second, [
-    { op: "row.delta", rowId: 2, path: "+./text", append: "lo" },
+    { op: "row.delta", rowId: 2, path: "text", append: "lo" },
   ]);
 });

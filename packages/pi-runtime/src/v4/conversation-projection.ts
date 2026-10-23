@@ -61,9 +61,13 @@ export class ConversationProjection {
     null;
   /** Message identity → stable projection key, so updates patch the same rows. */
   private readonly messageKeys = new Map<string, string>();
+  /** User messages already projected; they arrive twice (start and end). */
+  private readonly projectedUserKeys = new Set<string>();
   private nextMessageOrdinal = 1;
   /** Track the open turn so agent_end can close it. */
   private turnOpen = false;
+  /** Whether the opening snapshot went out; a second one restarts the sequence. */
+  private sentInitialSnapshot = false;
 
   constructor(
     private readonly session: PiSessionHandle,
@@ -73,8 +77,41 @@ export class ConversationProjection {
   }
 
   start(): void {
+    // Seed the projection from the transcript before subscribing. A session
+    // opened from the sidebar already has history in `state.messages`; without
+    // this backfill the opening snapshot is empty and the conversation renders
+    // blank even though the file is full.
+    this.backfillHistory();
     this.unsubscribe = this.session.subscribe((event) => this.handle(event));
     this.emitSnapshot();
+  }
+
+  /**
+   * Project the messages a session already holds.
+   *
+   * Runs once, before the subscription, so the opening snapshot carries the whole
+   * transcript instead of only events that arrive afterwards.
+   */
+  private backfillHistory(): void {
+    const state = this.session.session.state as unknown as {
+      messages?: readonly (UserMessage | AssistantMessage | ToolResultMessage)[];
+      isStreaming?: boolean;
+    };
+    const messages = state.messages ?? [];
+    if (messages.length === 0) return;
+
+    // One turn per user message, matching how a live run opens a turn.
+    let turn = 0;
+    for (const message of messages) {
+      const role = (message as { role?: string }).role;
+      if (role === "user") {
+        turn += 1;
+        beginTurn(this.state, `history-${turn}`);
+      }
+      const streaming = role === "assistant" && Boolean(state.isStreaming);
+      this.projectMessage(message, streaming);
+    }
+    this.phase = state.isStreaming ? "running" : "completedSuccess";
   }
 
   stop(): void {
@@ -82,10 +119,15 @@ export class ConversationProjection {
     this.unsubscribe = null;
   }
 
-  /** Re-emit a full snapshot; the client uses this after a gap or reconnect. */
-  resync(): void {
-    this.emitSnapshot();
-  }
+  /**
+   * Recovery hook for a same-subscription resync.
+   *
+   * Deliberately does NOT re-send a snapshot. pi keeps every projected row in
+   * memory and never loses a delta, so a client that resumes from its own
+   * sequence is already consistent; emitting a snapshot here is what produced
+   * `frameAssemblyMetadataMismatch` and silently emptied the transcript.
+   */
+  resync(): void {}
 
   /** Every projected row in rowId order — used by rows/range pagination. */
   rowsSnapshot() {
@@ -107,12 +149,74 @@ export class ConversationProjection {
       errorCode: this.errorCode,
     });
     // `onDynamicConversationFrame` carries the wire envelope, not the bare frame.
+    this.sentInitialSnapshot = true;
     this.options.emit(this.frames.wrap(this.frames.snapshot(view, snapshotRows(this.state))));
   }
 
   private emitDeltas(deltas: ProjectedDelta[]): void {
     const frame = this.frames.deltas(deltas);
     if (frame) this.options.emit(this.frames.wrap(frame));
+  }
+
+  /**
+   * Report a session-state change (phase, approvals, retry, title).
+   *
+   * This must NOT emit a snapshot. A snapshot carries `fromSeq: 0` while its
+   * `toSeq` keeps advancing, so re-sending one mid-stream makes the UI's
+   * assembler reject the frame with `frameAssemblyMetadataMismatch` — which then
+   * discards the streamed rows. Only the first frame of a subscription is a
+   * snapshot; everything after it is a delta.
+   */
+  private emitStateUpdate(): void {
+    if (!this.sentInitialSnapshot) {
+      this.emitSnapshot();
+      return;
+    }
+    this.emitDeltas([
+      {
+        op: "state.updated",
+        // Carry the fields that actually changed. An empty patch would leave the
+        // stop control showing after the turn finished, because the UI renders
+        // running/idle from `control`.
+        patch: (() => {
+          const view = readSessionView(this.session.session as AgentSession, {
+            phase: this.phase,
+            title: this.title,
+            pendingApprovals: this.pendingApprovals,
+            retry: this.retry,
+            errorMessage: this.errorMessage,
+            errorCode: this.errorCode,
+          });
+          const busy = view.phase === "running" || view.phase === "prewarming";
+          return {
+            revision: this.frames.nextRevision(),
+            control: {
+              phase: view.phase,
+              sessionEnded:
+                view.phase === "completedSuccess" ||
+                view.phase === "completedInterrupted" ||
+                view.phase === "error",
+              canStop: busy,
+              stopState: busy ? "stoppable" : "idle",
+              stopTargetKind: busy ? "assistant" : "unknown",
+              activeWorks: [],
+              lastError: view.errorMessage
+                ? { code: view.errorCode ?? "unknown", message: view.errorMessage }
+                : null,
+              apiRetry: view.retry
+                ? {
+                    attempt: view.retry.attempt,
+                    maxAttempts: view.retry.maxAttempts,
+                    delayMs: view.retry.delayMs,
+                    errorMessage: view.retry.errorMessage,
+                  }
+                : null,
+            },
+            ...(this.title ? { meta: { title: this.title, titleSource: "custom" as const } } : {}),
+          } as Record<string, unknown>;
+        })(),
+      },
+    ]);
   }
 
   private handle(event: PiEvent): void {
@@ -122,7 +226,7 @@ export class ConversationProjection {
         this.turnOpen = true;
         beginTurn(this.state, `turn-${this.nextMessageOrdinal}`);
         this.emitDeltas([]);
-        this.emitSnapshot();
+        this.emitStateUpdate();
         return;
       }
 
@@ -169,14 +273,14 @@ export class ConversationProjection {
         this.phase = "completedSuccess";
         this.turnOpen = false;
         this.emitDeltas(endTurn(this.state, "completedSuccess"));
-        this.emitSnapshot();
+        this.emitStateUpdate();
         return;
       }
 
       case "agent_settled": {
         if (this.phase === "running") {
           this.phase = "completedSuccess";
-          this.emitSnapshot();
+          this.emitStateUpdate();
         }
         return;
       }
@@ -194,20 +298,20 @@ export class ConversationProjection {
           delayMs: e.delayMs ?? 0,
           errorMessage: e.errorMessage ?? "",
         };
-        this.emitSnapshot();
+        this.emitStateUpdate();
         return;
       }
 
       case "auto_retry_end": {
         this.retry = null;
-        this.emitSnapshot();
+        this.emitStateUpdate();
         return;
       }
 
       case "session_info_changed": {
         const name = (event as { name?: string }).name;
         this.title = name;
-        this.emitSnapshot();
+        this.emitStateUpdate();
         return;
       }
 
@@ -231,7 +335,7 @@ export class ConversationProjection {
             createdAt: Date.now(),
           },
         ];
-        this.emitSnapshot();
+        this.emitStateUpdate();
         return;
       }
 
@@ -240,7 +344,7 @@ export class ConversationProjection {
         this.pendingApprovals = this.pendingApprovals.filter(
           (approval) => approval.interactionId !== interactionId,
         );
-        this.emitSnapshot();
+        this.emitStateUpdate();
         return;
       }
 
@@ -267,8 +371,23 @@ export class ConversationProjection {
       key = `msg-${this.nextMessageOrdinal++}`;
       this.messageKeys.set(identity, key);
     }
+    // Streaming growth is invisible without the text length: a row stuck at one
+    // character looks identical to a row that never updates.
+    if (role === "assistant" && streaming) {
+      const content = (message as AssistantMessage).content;
+      const text = content.find((block) => block.type === "text");
+      console.log(
+        `[pi-engine] update key=${key} blocks=${content.length} ` +
+          `text=${text && text.type === "text" ? text.text.length : 0}`,
+      );
+    }
 
     if (role === "user") {
+      // A user message arrives on both message_start and message_end. Re-projecting
+      // it appends a second identical row, which is why the transcript showed the
+      // same prompt twice.
+      if (this.projectedUserKeys.has(key)) return [];
+      this.projectedUserKeys.add(key);
       return projectUserMessage(this.state, message as UserMessage, key);
     }
     if (role === "assistant") {

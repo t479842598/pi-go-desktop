@@ -1333,6 +1333,24 @@ function ConversationComposerImpl({
     attachmentsReady &&
     submissionReady &&
     !runtimeBlocked;
+  // pi-zcode diagnostic: seven independent terms feed `canSend`, and the send
+  // button stayed disabled with every outer term clear. Printing each term names
+  // the blocker instead of inferring it from a disabled attribute.
+  if (!canSend && (hasDraftToSubmit || pending || disabled)) {
+    console.log("[pi-zcode-cansend]", {
+      disabled,
+      pending,
+      hasDraftToSubmit,
+      routingAllowsSend,
+      attachmentsReady,
+      submissionReady,
+      runtimeBlocked,
+      textLength: text.length,
+      mode,
+      hasSnapshot: snapshot !== null,
+      phase: snapshot?.control.phase ?? null,
+    });
+  }
   // 旧 UI 状态机：streaming + 空草稿 → Stop；有草稿 → 发送键（入队）。
   const showStopControl = canStop && !hasDraftToSubmit;
 

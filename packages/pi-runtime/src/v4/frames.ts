@@ -83,6 +83,7 @@ export function conversationTopic(sessionId: string): string {
 export class ConversationFrameBuilder {
   private seq = 0;
   private revision = 0;
+  /** Wire ordinal; independent of `seq` so a resync snapshot never reuses one. */
   private ordinal = 0;
   private readonly topic: string;
 
@@ -101,7 +102,6 @@ export class ConversationFrameBuilder {
   snapshot(view: PiSessionView, rows: ProjectedRow[]): ConversationFrame {
     const toSeq = ++this.seq;
     const revision = this.nextRevision();
-    this.ordinal += 1;
     return {
       topic: this.topic,
       subscriptionId: this.subscriptionId,
@@ -125,7 +125,6 @@ export class ConversationFrameBuilder {
     if (deltas.length === 0) return null;
     const fromSeq = this.seq;
     const toSeq = ++this.seq;
-    this.ordinal += 1;
     return {
       topic: this.topic,
       subscriptionId: this.subscriptionId,
@@ -143,11 +142,14 @@ export class ConversationFrameBuilder {
   /**
    * Wrap the next frame for the wire.
    *
-   * The first frame of a subscription is `initial`; anything after it is
-   * `online`. The store uses the kind to decide whether a frame may be applied
-   * before the ACK barrier lifts.
+   * `logicalFrameOrdinal` is its own monotonically increasing counter, NOT the
+   * sequence number. The assembler remembers the last ordinal it settled per
+   * route: reusing a sequence-derived value made a resync's snapshot collide with
+   * an already-settled frame (`frameAssemblyOrdinalConflict`), and restarting a
+   * counter made it go backwards (`frameAssemblyMetadataMismatch`).
    */
   wrap(frame: ConversationFrame): ConversationWireFrame {
+    this.ordinal += 1;
     return toWireFrame(frame, this.ordinal, this.ordinal === 1 ? "initial" : "online");
   }
 }

@@ -86,27 +86,38 @@ export class PiModelSelectionService {
 /**
  * Pick the selection the composer should start from.
  *
+ * The composer's submit gate requires `selection.options.reasoningLevel` to be
+ * present AND to appear in that model's `optionSpecs.reasoningLevel.values`; a
+ * selection without it validates as `reasoning-level-missing` and the send button
+ * stays disabled no matter what else is correct.
+ *
  * pi's own configured default wins; otherwise the first available model is used.
- * A `null` answer is honest — the caller then reports `selection-missing` rather
- * than pretending a model is selected.
+ * A `null` answer is honest — the caller then reports `selection-missing`.
  */
-function firstSelection(
-  models: readonly Model<never>[],
-): { providerId: string; modelId: string } | null {
+function firstSelection(models: readonly Model<never>[]): ModelSelectionValue | null {
   if (models.length === 0) return null;
   const preferred = readConfiguredDefault();
-  if (preferred) {
-    const match = models.find((model) => {
-      const provider = String((model as unknown as { provider?: unknown }).provider ?? "");
-      return provider === preferred.providerId && idOf(model) === preferred.modelId;
-    });
-    if (match) return preferred;
-  }
-  const first = models[0]!;
-  return {
-    providerId: String((first as unknown as { provider?: unknown }).provider ?? ""),
-    modelId: idOf(first),
-  };
+  const chosen =
+    (preferred &&
+      models.find(
+        (model) =>
+          String((model as unknown as { provider?: unknown }).provider ?? "") ===
+            preferred.providerId && idOf(model) === preferred.modelId,
+      )) ||
+    models[0]!;
+
+  const providerId = String((chosen as unknown as { provider?: unknown }).provider ?? "");
+  const modelId = idOf(chosen);
+  const levels = reasoningLevelsOf(chosen);
+  const level = levels.includes("medium") ? "medium" : levels[0];
+  if (!level) return null;
+  return { providerId, modelId, options: { reasoningLevel: level } };
+}
+
+interface ModelSelectionValue {
+  providerId: string;
+  modelId: string;
+  options: { reasoningLevel: string };
 }
 
 /**

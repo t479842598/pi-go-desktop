@@ -17,7 +17,11 @@
 import { randomUUID } from "node:crypto";
 import { Emitter } from "@zcode/rpc";
 import type { Event } from "@zcode/rpc";
-import { V4_WIRE_PROTOCOL_VERSION } from "@zcode/shared/zcode-protocol-v4";
+import {
+  V4_WIRE_PROTOCOL_VERSION,
+  TopicWireFrameAssembler,
+  conversationTopicFrameSchema,
+} from "@zcode/shared/zcode-protocol-v4";
 import type {
   ClientHello,
   CommandAck,
@@ -32,7 +36,7 @@ import { PiSessionHost, type PiSessionHandle } from "../session-host.js";
 import { locateSession } from "../session-locator.js";
 import { listPiSessions } from "../session-list.js";
 import { ConversationProjection } from "./conversation-projection.js";
-import { toWireFrame } from "./frames.js";
+import { toWireFrame, type ConversationWireFrame } from "./frames.js";
 
 export interface PiAgentServiceOptions {
   host?: PiSessionHost;
@@ -64,6 +68,10 @@ export class PiAgentService {
   private readonly connectionId = randomUUID();
   /** Revision the service reports in command ACKs; monotonic per connection. */
   private revision = 0;
+  /** Delivery kinds already dumped to the log, to keep the trace readable. */
+  private readonly dumpedKinds = new Set<string>();
+  /** Mirrors the UI's wire assembler; used only to name a rejection locally. */
+  private assemblerProbe: TopicWireFrameAssembler<unknown> | null = null;
 
   constructor(options: PiAgentServiceOptions = {}) {
     this.host = options.host ?? new PiSessionHost({ sessionDir: options.sessionDir });
@@ -106,20 +114,19 @@ export class PiAgentService {
     const subscriptionId = randomUUID();
     const handle = await this.ensureSession(params.sessionId);
 
+    // Only one projection may stream a session. The UI opens a draft prewarm
+    // subscription and then a real one for the same session; leaving both alive
+    // put two frames with the same topic and ordinal-1 snapshot on the wire, and
+    // the assembler rejects the second.
+    for (const [existingId, existing] of this.subscriptions) {
+      if (existing.sessionId !== handle.sessionId) continue;
+      existing.projection.stop();
+      this.subscriptions.delete(existingId);
+    }
+
     const projection = new ConversationProjection(handle, {
       subscriptionId,
-      emit: (wire) => {
-        const frame = wire.frame;
-        const size =
-          frame.payload.kind === "snapshot"
-            ? (frame.payload.snapshot as { rows?: { window?: unknown[] } }).rows?.window?.length ?? 0
-            : frame.payload.deltas.length;
-        console.log(
-          `[pi-engine] frame ${frame.payload.kind} ${wire.deliveryKind} ` +
-            `seq=${frame.fromSeq}->${frame.toSeq} units=${size}`,
-        );
-        this.frameEmitter.fire(wire);
-      },
+      emit: this.emitFrame,
     });
 
     this.subscriptions.set(subscriptionId, {
@@ -139,19 +146,75 @@ export class PiAgentService {
   }): Promise<V4ConversationResyncResult> {
     const subscription = this.subscriptions.get(params.subscriptionId);
     if (!subscription) {
-      // An unknown subscription cannot be resumed; the client treats a missing
-      // ack as "resubscribe" rather than retrying forever.
       throw new Error(`Unknown subscription: ${params.subscriptionId}`);
     }
+    // Answer with the same subscription id and let the projection continue its
+    // own sequence. `resume` tells the UI to expect deltas from where it stopped
+    // rather than a fresh snapshot: a snapshot mid-stream is rejected by the
+    // assembler (either a metadata mismatch or an ordinal conflict), and every
+    // later frame is then dropped, leaving the transcript empty.
     subscription.projection.resync();
     return {
       ack: {
         subscriptionId: params.subscriptionId,
-        mode: "snapshot",
+        mode: "resume",
         logEpoch: subscription.logEpoch,
       },
     };
   }
+
+  /** Frame fan-out shared by the initial subscription and every resync. */
+  private emitFrame = (wire: ConversationWireFrame): void => {
+    const frame = wire.frame;
+    const size =
+      frame.payload.kind === "snapshot"
+        ? (frame.payload.snapshot as { rows?: { window?: unknown[] } }).rows?.window?.length ?? 0
+        : frame.payload.deltas.length;
+    console.log(
+      `[pi-engine] frame ${frame.payload.kind} ${wire.deliveryKind} ` +
+        `seq=${frame.fromSeq}->${frame.toSeq} units=${size}`,
+    );
+    // The assembler rejects frame 5 every run, so the exact envelope matters more
+    // than a summary: dump the first frame of each (deliveryKind, payload kind).
+    const dumpKey = `${wire.deliveryKind}:${frame.payload.kind}`;
+    if (!this.dumpedKinds.has(dumpKey)) {
+      this.dumpedKinds.add(dumpKey);
+      console.log(
+        `[pi-engine]   wire keys=${Object.keys(wire).join(",")} ` +
+          `ordinal=${wire.logicalFrameOrdinal} ver=${wire.wireVersion} ` +
+          `ops=${frame.payload.kind === "deltas" ? frame.payload.deltas.map((delta) => delta.op).join("+") : "n/a"}`,
+      );
+    }
+    // Validate every frame with the same assembler the UI runs. A local rejection
+    // here names the exact rule instead of inferring it from UI warnings.
+    if (!this.assemblerProbe) {
+      this.assemblerProbe = new TopicWireFrameAssembler<unknown>(conversationTopicFrameSchema, {
+        maxAssemblyBytes: 32 * 1024 * 1024,
+        timeoutMs: 30_000,
+        maxPhysicalFrameBytes: 1024 * 1024,
+      });
+    }
+    const outcome = this.assemblerProbe.accept(wire as never);
+    for (const event of outcome) {
+      if (event.kind === "fault") {
+        console.log(
+          `[pi-engine]   LOCAL REJECT ordinal=${wire.logicalFrameOrdinal} ` +
+            `reason=${event.fault.reasonCode} detail=${JSON.stringify(event.fault).slice(0, 300)}`,
+        );
+      }
+    }
+    // The UI renders nothing unless the rows actually reach it, so keep the row
+    // kinds visible: an all-header window explains an empty transcript.
+    if (frame.payload.kind === "snapshot" && size > 0) {
+      const rows = (
+        frame.payload.snapshot as { rows: { window: Array<{ kind: string; text?: string }> } }
+      ).rows.window;
+      console.log(
+        `[pi-engine]   rows: ${rows.map((row) => `${row.kind}(${(row.text ?? "").slice(0, 18)})`).join(", ")}`,
+      );
+    }
+    this.frameEmitter.fire(wire);
+  };
 
   async unsubscribeConversationV4(params: { subscriptionId: string }): Promise<void> {
     const subscription = this.subscriptions.get(params.subscriptionId);

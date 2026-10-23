@@ -5441,10 +5441,27 @@ export function SessionPane({
       onExternalTextInsertApplied={handleExternalTextInsertApplied}
       autoFocusEnabled={focused}
       disabled={
-        connecting ||
-        draftRuntimeRebuilding ||
-        queueEditActiveForCurrentComposer ||
-        quotaBanner.state.blocksSubmit
+        // pi-zcode diagnostic: the composer never enabled, and four independent
+        // conditions feed `disabled`. Printing them names the culprit instead of
+        // inferring it from the surface behaviour.
+        (() => {
+          const factors = {
+            connecting,
+            draftRuntimeRebuilding,
+            queueEditActiveForCurrentComposer,
+            blocksSubmit: quotaBanner.state.blocksSubmit,
+          };
+          if (connecting || draftRuntimeRebuilding || queueEditActiveForCurrentComposer || factors.blocksSubmit) {
+            console.log("[pi-zcode-gate] composer disabled", factors, {
+              sessionId,
+              hasSnapshot: snapshot !== null,
+              stateStatus: state.status,
+            });
+          }
+          return (
+            connecting || draftRuntimeRebuilding || queueEditActiveForCurrentComposer || factors.blocksSubmit
+          );
+        })()
       }
       isWebRemoteControl={compactForRemoteControl}
       workspacePath={workspacePath}
