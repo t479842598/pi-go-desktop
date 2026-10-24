@@ -3,10 +3,34 @@
   "compilerOptions": {
     "outDir": "dist",
     "rootDir": "src",
-    "lib": ["es2025"],
-    "types": ["node"]
+    "lib": [
+      "es2025"
+    ],
+    "types": [
+      "node"
+    ]
   },
-  "include": ["src"],
-  "exclude": ["src/smoke"],
-  "references": [{ "path": "../shared" }]
+  "include": [
+    "src"
+  ],
+  "exclude": [
+    "src/smoke"
+  ],
+  "references": [
+    {
+      "path": "../shared"
+    },
+    {
+      "path": "../rpc"
+    },
+    {
+      "path": "../services"
+    },
+    {
+      "path": "../provider"
+    },
+    {
+      "path": "../provider-node"
+    }
+  ]
 }

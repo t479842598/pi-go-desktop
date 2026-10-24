@@ -42,9 +42,27 @@ export function getDataBaseDir(): string {
   return defaultDataBaseDir;
 }
 
-/** {dataBaseDir}/.zcode */
+/** {dataBaseDir}/.zcode —— PI/PiG 运行时是 {dataBaseDir}/.pi-web */
 export function getZCodeDataRootDir(): string {
-  return join(getDataBaseDir(), ".zcode");
+  // pi-zcode: PI 与 ZCode 是两个产品，数据根必须分开。共用 ~/.zcode 会让两个应用
+  // 互相覆盖 setting.json（recentProjects / 窗口尺寸 / 语言来回洗）、共用中继设备
+  // 身份互相踢下线。PI_ENGINE 由 main 按应用身份锁定并转发给 host，这里按调用时
+  // 环境取值，dev/打包/远端三条路径行为一致。
+  const isPiEngine = process.env.PI_ENGINE === "pi" || process.env.PI_ENGINE === "pig";
+  const rootName = isPiEngine ? ".pi-web" : ".zcode";
+  return join(getDataBaseDir(), rootName);
+}
+
+/** PI/G 的统一 Agent 数据根；生产运行时禁止散落拼接 ~/.pi/agent。 */
+export function getPiGAgentDir(): string {
+  // PiG 的数据域必须独立于当前进程是否已经设置 PI_ENGINE；路径 helper
+  // 也会被迁移器、备份器和测试单独调用，不能因环境变量缺失而落到 .zcode。
+  return join(getDataBaseDir(), ".pi-web", "pig-agent");
+}
+
+/** PI/G 的统一会话根。 */
+export function getPiGSessionDir(): string {
+  return join(getPiGAgentDir(), "sessions");
 }
 
 /** 非项目对话共享的真实工作目录；默认 ~/.zcode/workspace/default。 */

@@ -23,7 +23,9 @@
     "zod": "4.6.5",
     "@zcode/rpc": "workspace:*",
     "@zcode/services": "workspace:*",
-    "@zcode/client": "workspace:*"
+    "@zcode/client": "workspace:*",
+    "@zcode/provider": "workspace:*",
+    "@zcode/provider-node": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^25.5.0",

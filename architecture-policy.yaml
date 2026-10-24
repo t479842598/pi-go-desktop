@@ -733,6 +733,39 @@ modules:
       ui: .
     owner: conversation
 
+  # pig-runtime：PiG subprocess adapter。
+  - id: pig-runtime
+    roots:
+      - packages/pi-runtime/src/pig
+    managed: true
+    requires:
+      - rpc
+      - services
+      - shared
+    publicEntrypoints:
+      - packages/pi-runtime/src/pig/index.ts
+      - packages/pi-runtime/src/pig/contract.ts
+    layers:
+      adapters: .
+    owner: agent-runtime
+  # session-migration：canonical PiG session v3 import pipeline。
+  - id: session-migration
+    roots:
+      - packages/pi-runtime/src/session-migration
+    managed: true
+    requires:
+      - pig-runtime
+      - services
+      - shared
+    publicEntrypoints:
+      - packages/pi-runtime/src/session-migration/index.ts
+      - packages/pi-runtime/src/session-migration/contract.ts
+      - packages/pi-runtime/src/session-migration/canonical.ts
+      - packages/pi-runtime/src/session-migration/writer.ts
+    layers:
+      adapters: .
+    owner: conversation
+
 global:
   # 临时时间戳（2026-09-10）：unmanaged-new-file 只约束此日期之后首次入库的文件。
   # 基于领先 staging 很多的分支开工时，merge-base 之前的"新增"文件不应被追溯。

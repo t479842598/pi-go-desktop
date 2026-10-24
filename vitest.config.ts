@@ -114,6 +114,8 @@ export default defineConfig({
             "packages/*/test/**/*.test.ts",
             // 架构治理要求 managed 模块自带 contract.test.ts（见 architecture-policy.yaml），放在模块目录内。
             "packages/*/src/**/contract.test.ts",
+            "packages/pi-runtime/src/pig/**/*.test.ts",
+            "packages/pi-runtime/src/session-migration/**/*.test.ts",
             // Gen UI 目录回归位于源码旁，默认入口也必须执行，避免只在手动定向运行时生效。
             "packages/shared/src/node/genUiPaths.test.ts",
             "packages/services/src/gen-ui/**/*.test.ts",

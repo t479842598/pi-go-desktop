@@ -13,3 +13,5 @@ export * from "./v4/session-view.js";
 export * from "./v4/frames.js";
 export * from "./v4/conversation-projection.js";
 export * from "./v4/pi-agent-service.js";
+export * from "./pig/index.js";
+export * from "./session-migration/index.js";

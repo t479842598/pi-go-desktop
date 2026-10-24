@@ -109,6 +109,8 @@ export {
   setDataBaseDir,
   getDataBaseDir,
   getZCodeDataRootDir,
+  getPiGAgentDir,
+  getPiGSessionDir,
   getConversationWorkspaceDir,
   getAppConfigDir,
   getExportLogStageDir,
@@ -3331,7 +3333,9 @@ async function mountPiAgentService(services: ServiceCollection): Promise<void> {
   // bundle and the Electron main process dies at load ("Dynamic require of
   // child_process"), so the module is loaded only when the flag is set.
   const { mountPiServices } = await import("@pi/runtime");
-  mountPiServices(services);
+  const mounted = mountPiServices(services);
+  // Provider 配置双向同步（models.json ⇄ provider_config.json）与 host 同生命周期。
+  await mounted.providerSettings.start();
 }
 
 export { scopeConversationShareServiceForAttachment } from "./conversation-share/conversationShareConnectionScope.js";
