@@ -5,7 +5,6 @@ import {
   readdirSync,
   readFileSync,
   rmSync,
-  statSync,
   unlinkSync,
   writeFileSync,
 } from "node:fs";
@@ -24,20 +23,30 @@ export function stripSourceMappingUrlComments(source) {
   return source.replace(SOURCE_MAPPING_URL_LINE_RE, "").replace(SOURCE_MAPPING_URL_BLOCK_RE, "");
 }
 
-function walkFiles(rootDir, visitor) {
-  if (!existsSync(rootDir)) {
-    return;
+export function walkFiles(rootDir, visitor, readDirectory = readdirSync) {
+  let entries;
+  try {
+    entries = readDirectory(rootDir, { withFileTypes: true });
+  } catch (error) {
+    if (error?.code === "ENOENT") return;
+    throw error;
   }
 
-  for (const entry of readdirSync(rootDir)) {
-    const entryPath = resolve(rootDir, entry);
-    const stat = statSync(entryPath);
-    if (stat.isDirectory()) {
-      walkFiles(entryPath, visitor);
+  for (const entry of entries) {
+    // 不跟随包目录中的符号链接，并容忍扫描期间已消失的目录项。
+    if (entry.isSymbolicLink()) continue;
+
+    const entryPath = resolve(rootDir, entry.name);
+    if (entry.isDirectory()) {
+      walkFiles(entryPath, visitor, readDirectory);
       continue;
     }
-    if (stat.isFile()) {
+    if (!entry.isFile()) continue;
+
+    try {
       visitor(entryPath);
+    } catch (error) {
+      if (error?.code !== "ENOENT") throw error;
     }
   }
 }

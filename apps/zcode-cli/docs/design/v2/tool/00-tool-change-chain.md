@@ -1821,6 +1821,14 @@ MCP isError 和历史 hydration 不触发创建。工具执行、权限、原始
 手机 replayable 不消费创建副作用。测试覆盖无订阅实时结果、重复事件、历史恢复、后台建页与返回复用。
 宿主执行/保留规则见根目录 `docs/plugin-ui-background-execution.md`。
 
+### CLI V4 projection 编译修复（2026-10-25）
+
+`ConversationRow.actions` 显式标注为公开 V4 schema 派生的共享动作类型，避免 bootstrap 编译时将展开结果推断为空对象；只修正静态类型，不改变投影输出或运行时动作。验证 bootstrap typecheck 与 `product-projection.test.ts` 233 项通过。
+
+### 桌面 Sourcemap 清理竞态修复（2026-10-25）
+
+Electron Builder `afterPack` 清理 app.asar 临时解包目录时，目录项可能在枚举和递归之间消失；改用 `Dirent` 遍历、不跟随符号链接，仅跳过 `ENOENT`，其他 I/O 错误继续上抛。回归覆盖竞态、失效符号链接、非 `ENOENT` 错误及原目录清理行为，4 项通过。
+
 ### 文档插件多窗口视图修复（2026-10-16）
 
 MCP app-only report_view 增加可选 viewId，release_view 释放指定窗口；模型 get_view 可选 viewId，缺省且存在多个上报窗口时返回歧义与清单。状态唯一归属 DocumentOwner，不由页面决定其他窗口的视图；旧客户端缺省 viewId 仍走 legacy 槽。show_in_viewer 保持专用 surface 路由并明确工具描述。导入仍为 app-only workspace 副作用；串行 admission、10 分钟未活动过期与部分文件清扫归 importer，完成副本不清理。覆盖 schema 到真实 MCP/AppBridge 的多窗口回归。

@@ -1327,7 +1327,8 @@ export class ProductProjection {
     for (const row of rows) {
       if (row.kind !== "turnHeader" && row.kind !== "userInput" && row.kind !== "assistantText")
         continue;
-      const nextActions = { ...row.actions };
+      // 显式绑定协议共享的 actions 形状，确保后续派生动作仍符合 V4 schema。
+      const nextActions: NonNullable<ConversationRow["actions"]> = { ...row.actions };
       if (row.kind === "turnHeader") {
         const canRewindFiles =
           !completionBlockingActive &&

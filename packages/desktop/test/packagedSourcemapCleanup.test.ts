@@ -1,4 +1,13 @@
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdtempSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -6,6 +15,7 @@ import {
   removeSourceMapFilesInDirectory,
   stripSourceMappingUrlComments,
   stripSourceMappingUrlCommentsInDirectory,
+  walkFiles,
 } from "../scripts/packaged-sourcemap-cleanup.mjs";
 
 describe("packaged sourcemap cleanup", () => {
@@ -20,6 +30,48 @@ describe("packaged sourcemap cleanup", () => {
         ].join("\n"),
       ),
     ).toBe(["const answer = 42;", "body{color:red}"].join("\n"));
+  });
+
+  it("应跳过遍历期间消失的目录项并忽略符号链接", () => {
+    const rootDir = mkdtempSync(resolve(tmpdir(), "zcode-sourcemap-race-test-"));
+    try {
+      const removedDir = resolve(rootDir, "removed");
+      mkdirSync(removedDir);
+      writeFileSync(resolve(removedDir, "stale.js"), "//# sourceMappingURL=stale.js.map");
+      symlinkSync(resolve(rootDir, "missing-target"), resolve(rootDir, "broken-link"));
+
+      let removed = false;
+      const readDirectory = (directory: string, options: { withFileTypes: true }) => {
+        const entries = readdirSync(directory, options);
+        if (directory === rootDir && !removed) {
+          rmSync(removedDir, { force: true, recursive: true });
+          removed = true;
+        }
+        return entries;
+      };
+
+      expect(() => walkFiles(rootDir, () => {}, readDirectory)).not.toThrow();
+    } finally {
+      rmSync(rootDir, { force: true, recursive: true });
+    }
+  });
+
+  it("应继续传播非 ENOENT 文件系统错误", () => {
+    const rootDir = mkdtempSync(resolve(tmpdir(), "zcode-sourcemap-error-test-"));
+    try {
+      const failure = Object.assign(new Error("permission denied"), { code: "EACCES" });
+      expect(() =>
+        walkFiles(
+          rootDir,
+          () => {},
+          () => {
+            throw failure;
+          },
+        ),
+      ).toThrow(failure);
+    } finally {
+      rmSync(rootDir, { force: true, recursive: true });
+    }
   });
 
   it("应递归清理发布资源目录里的 sourcemap 文件和路径注释", () => {
