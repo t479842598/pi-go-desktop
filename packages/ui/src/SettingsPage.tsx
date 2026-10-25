@@ -61,6 +61,7 @@ import {
   setPendingSettingsSectionIntent,
   shouldFallbackSettingsUsageTabToApp,
   writeLastSettingsSectionPreference,
+  isPiProduct,
   type SettingsModelProviderTarget,
 } from "@/lib/settingsNavigation.js";
 import { readSidebarUsageCodingPlanSourcePreference } from "@/lib/sidebarUsageCodingPlanProviderPreference.js";
@@ -72,6 +73,7 @@ import { buildUsageEntitlementCacheKey } from "@/lib/usageEntitlementCache.js";
 import { ArchiveManagement, useOptionalProjectDirectory } from "@/project-sidebar/index.js";
 import { resolveRecentRemoteProjectPreference } from "@/project-sidebar/remote-project-connection.js";
 import { ModelProviderSection } from "@/settings/ModelProviderSection.js";
+import { SessionDataSection } from "@/settings/SessionDataSection.js";
 import { OfficialReleaseSection } from "@/settings/OfficialReleaseSection.js";
 import { OfficialRewardsSection } from "@/settings/OfficialRewardsSection.js";
 import { BackupSettingsSection } from "@/settings/BackupSettingsSection.js";
@@ -439,14 +441,20 @@ export function SettingsPage({
   const usageBigmodelProvider = usageProviderSettingsView?.providers.find(
     (provider) => provider.providerId === BUILTIN_MODEL_PROVIDER_IDS.bigmodelIndividualCodingPlan,
   );
-  const usageZaiProviderAccess = resolveEntitledAccountProviderAccess(
-    usageProviderSettingsView,
-    BUILTIN_MODEL_PROVIDER_IDS.zaiIndividualCodingPlan,
-  );
-  const usageBigmodelProviderAccess = resolveEntitledAccountProviderAccess(
-    usageProviderSettingsView,
-    BUILTIN_MODEL_PROVIDER_IDS.bigmodelIndividualCodingPlan,
-  );
+  // PI 没有 ZCode 账号体系，也就不存在 Coding Plan 订阅。继续按 zhipu-account
+  // access 解析会让设置页渲染出 ZCode 的套餐/额度区块，因此 PI 下直接视为无权益。
+  const usageZaiProviderAccess = isPiProduct()
+    ? null
+    : resolveEntitledAccountProviderAccess(
+        usageProviderSettingsView,
+        BUILTIN_MODEL_PROVIDER_IDS.zaiIndividualCodingPlan,
+      );
+  const usageBigmodelProviderAccess = isPiProduct()
+    ? null
+    : resolveEntitledAccountProviderAccess(
+        usageProviderSettingsView,
+        BUILTIN_MODEL_PROVIDER_IDS.bigmodelIndividualCodingPlan,
+      );
   const usageZaiProviderFingerprint = resolveEntitledAccountProviderAccessFingerprint(
     usageProviderSettingsView,
     BUILTIN_MODEL_PROVIDER_IDS.zaiIndividualCodingPlan,
@@ -1799,13 +1807,19 @@ export function SettingsPage({
                           ) : null}
                           {activeSection === "general" && isDesktop ? (
                             <>
-                              <OfficialReleaseSection
-                                systemService={localHostServices.systemService}
-                              />
-                              <OfficialRewardsSection
-                                credentialService={localHostServices.credentialService}
-                                oauthService={localHostServices.oauthService}
-                              />
+                              {/* pi-zcode：「官方版本动态/官方活动」拉的是 ZCode 自托管 OSS，
+                                  与 PI 无关，按产品隐藏；PI 的版本信息在草稿署名处。 */}
+                              {isPiProduct() ? null : (
+                                <OfficialReleaseSection
+                                  systemService={localHostServices.systemService}
+                                />
+                              )}
+                              {isPiProduct() ? null : (
+                                <OfficialRewardsSection
+                                  credentialService={localHostServices.credentialService}
+                                  oauthService={localHostServices.oauthService}
+                                />
+                              )}
                             </>
                           ) : null}
                         </div>
@@ -2082,7 +2096,9 @@ export function SettingsPage({
                             <ShortcutSettingsSection isDesktop={Boolean(isDesktop)} />
                           ) : activeSection === "modelProvider" ? (
                             <ServiceProvider services={localHostServices}>
-                              {/* 模型配置属于本机全局事实源；激活远端 workspace 时也不能注入远端 Host。 */}
+                              {/* 模型配置属于本机全局事实源；激活远端 workspace 时也不能注入远端 Host。
+                                  pi-zcode：Pro 编辑器原样使用，数据由 PiProviderSettingsService
+                                  （models.json ⇄ 个人层双向同步）在 host 侧供给。 */}
                               <ModelProviderSection
                                 workspacePath={activeWorkspacePath ?? captionWorkspacePath ?? ""}
                                 connectivityWorkspacePath={
@@ -2171,11 +2187,13 @@ export function SettingsPage({
                               />
                               <ArchiveManagement />
                             </div>
-                        ) : activeSection === "backup" ? (
-                          <BackupSettingsSection
-                            workspacePath={activeWorkspacePath ?? undefined}
-                            workspaceIdentity={activeWorkspaceIdentity}
-                          />
+                          ) : activeSection === "backup" ? (
+                            <BackupSettingsSection
+                              workspacePath={activeWorkspacePath ?? undefined}
+                              workspaceIdentity={activeWorkspaceIdentity}
+                            />
+                          ) : activeSection === "sessionData" ? (
+                            <SessionDataSection />
                           ) : activeSection === "usage" ? (
                             <UsageStatsSection
                               activeTab={usageActiveTab}
