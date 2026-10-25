@@ -152,4 +152,23 @@ export class ConversationFrameBuilder {
     this.ordinal += 1;
     return toWireFrame(frame, this.ordinal, this.ordinal === 1 ? "initial" : "online");
   }
+
+  /** Explicit delivery kind — the initial handshake must stay `initial`. */
+  wrapFor(
+    frame: ConversationFrame,
+    deliveryKind: "initial" | "online" | "recovery",
+  ): ConversationWireFrame {
+    this.ordinal += 1;
+    return toWireFrame(frame, this.ordinal, deliveryKind);
+  }
+
+  /**
+   * Wrap a resync answer. The client only settles a recovery flight on frames
+   * delivered as `recovery` — an `online` delivery applies but never settles,
+   * so the flight deadlifts into `recoveryFrameTimedOut` and the remote view
+   * dies with the transcript still showing stale rows.
+   */
+  wrapRecovery(frame: ConversationFrame): ConversationWireFrame {
+    return this.wrapFor(frame, "recovery");
+  }
 }

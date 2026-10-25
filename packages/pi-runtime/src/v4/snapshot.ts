@@ -158,9 +158,5 @@ export function buildConversationSnapshot(input: SnapshotInput): Record<string, 
 }
 
 function isEnded(phase: PiSessionView["phase"]): boolean {
-  return (
-    phase === "completedSuccess" ||
-    phase === "completedInterrupted" ||
-    phase === "error"
-  );
+  return phase === "completedSuccess" || phase === "completedInterrupted" || phase === "error";
 }

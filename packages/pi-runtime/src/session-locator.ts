@@ -77,8 +77,11 @@ export async function findSessionFile(
 }
 
 /** Resolve a session id to its file plus the cwd recorded in the header. */
-export async function locateSession(sessionId: string): Promise<SessionLocation | null> {
-  const sessionFile = await findSessionFile(sessionId);
+export async function locateSession(
+  sessionId: string,
+  sessionsDir = defaultSessionsDir(),
+): Promise<SessionLocation | null> {
+  const sessionFile = await findSessionFile(sessionId, sessionsDir);
   if (!sessionFile) return null;
   const header = await readSessionHeader(sessionFile);
   if (header === null) return null;

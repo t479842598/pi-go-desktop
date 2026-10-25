@@ -165,9 +165,31 @@ armsRum.client.useReporter = (reporter) => {
   });
   useReporter(reporter);
 };
-export const armsInitPromise = armsRum
+// pi-zcode: telemetry must never gate startup. index.ts awaits this promise
+// before it creates the first BrowserWindow, so an init() that never settles
+// (unreachable endpoint, blocked DNS) or one that rejects leaves a live main
+// process with no window and no renderer helpers — exactly how the packaged
+// build "launches then disappears". The evidence was a userData directory
+// holding nothing but an empty `rum-electron-store`: init() ran, created its
+// store, and never resolved.
+//
+// PI reports nothing at all; every other build waits at most three seconds.
+//
+// The gate cannot key on the application name: `runtimeApplicationName` comes
+// from ZCODE_DESKTOP_APPLICATION_NAME, which electron-builder injects into the
+// packaged bundle, and the name PI uses there is not visible from here. A
+// packaged app launched from Finder inherits no environment either. So the
+// timeout is unconditional — telemetry is an observability side channel and can
+// never be allowed to hold a window hostage in any build.
+const piTelemetryDisabled =
+  process.env["PI_ENGINE"] === "pig" ||
+  runtimeApplicationName === "PI" ||
+  runtimeApplicationName === "PI Preview";
+
+const armsRumInit = armsRum
   .init({
-    enable: ZCODE_ARMS_RUM_ENDPOINT !== "",
+    // PI 完全不上报：enable=false 让 SDK 停在采集层，而不是仅靠不等待它的 init Promise。
+    enable: !piTelemetryDisabled && ZCODE_ARMS_RUM_ENDPOINT !== "",
     // 上报版本必须是纯 semver：自托管版本号带 -selfhost.N 后缀，官方只认它自己发行过的号。
     version: ZCODE_REPORT_VERSION,
     endpoint: ZCODE_ARMS_RUM_ENDPOINT,
@@ -259,5 +281,17 @@ export const armsInitPromise = armsRum
   })
   .catch((error) => {
     logger.error("[arms] electron init failed:", error);
-    throw error;
   });
+
+export const armsInitPromise: Promise<void> = piTelemetryDisabled
+  ? Promise.resolve()
+  : Promise.race([
+      armsRumInit,
+      new Promise<void>((resolve) => {
+        const timer = setTimeout(() => {
+          logger.warn("[arms] init exceeded 3s, continuing startup without telemetry");
+          resolve();
+        }, 3_000);
+        timer.unref?.();
+      }),
+    ]);

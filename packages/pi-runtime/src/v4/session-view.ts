@@ -6,8 +6,6 @@
  * single adapter between them; nothing else reaches into `AgentSession.state`.
  */
 
-import type { AgentSession } from "@earendil-works/pi-coding-agent";
-
 export type PiPhase =
   | "draft"
   | "prewarming"
@@ -76,7 +74,7 @@ const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "ma
  * which is what ZCode shows for a freshly created empty session.
  */
 export function readSessionView(
-  session: AgentSession,
+  session: { readonly sessionId: string; readonly state: unknown },
   extras: {
     phase?: PiPhase;
     title?: string;
@@ -99,7 +97,8 @@ export function readSessionView(
   // A session that is not streaming is idle, not "running". Reporting a busy
   // phase makes the composer render its stop control instead of the send
   // button, so the user can never submit.
-  const inferredPhase: PiPhase = extras.phase ?? (state.isStreaming ? "running" : "completedSuccess");
+  const inferredPhase: PiPhase =
+    extras.phase ?? (state.isStreaming ? "running" : "completedSuccess");
   return {
     sessionId: session.sessionId,
     logEpoch: session.sessionId,

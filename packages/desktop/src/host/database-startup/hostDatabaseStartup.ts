@@ -49,7 +49,7 @@ export function createHostDatabaseStartup(options: {
         // engine, and its absence surfaced as a blocking
         // `unsupported_runtime` startup failure. Skipping straight to service
         // initialization is the honest answer: there is nothing to migrate.
-        if (process.env["PI_ENGINE"] === "pi") {
+        if (process.env["PI_ENGINE"] === "pig") {
           report("starting_services");
           await options.initializeServices();
           return;

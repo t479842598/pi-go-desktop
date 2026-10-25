@@ -18,11 +18,15 @@ import {
 } from "#src/project/index.js";
 export { createLegacySingleRootProjectService } from "#src/project/index.js";
 export { createRemoteProjectService } from "#src/remote-projects/index.js";
-import { getZCodeDataRootDir as projectDataRoot } from "#src/paths.js";
+import { getZCodeDataRootDir as projectDataRoot, isPiGEngine } from "#src/paths.js";
 import { createTaskGroupService, ITaskGroupService, groupTaskKey } from "#src/task-groups/index.js";
 import { IGenUiService } from "./gen-ui/contract.js";
 import { createGenUiService } from "./gen-ui/node.js";
-import { channelReplyHostRequestSchema, channelReplyResultSchema, resolveWorkspaceKey } from "@zcode/shared";
+import {
+  channelReplyHostRequestSchema,
+  channelReplyResultSchema,
+  resolveWorkspaceKey,
+} from "@zcode/shared";
 /* eslint-disable max-lines -- host process 服务注册和启动装配需要集中维护，拆散后会更难追踪依赖注入顺序 */
 // Node.js service implementations — NOT safe to import in browser code
 import { randomBytes } from "node:crypto";
@@ -1738,7 +1742,11 @@ export function createLocalServices(options: {
   // 同款前向引用：会话泳道的空闲回收门禁要查 task-index 活动集合，而 syncer 在
   // zcodeAgentService 之后才创建。真正被调用发生在空闲计时器到点（数分钟后），那时早已赋值。
   let hasActiveWorkRef:
-    | ((context: { workspacePath: string; workspaceIdentity?: string; workspaceKey: string }) => boolean)
+    | ((context: {
+        workspacePath: string;
+        workspaceIdentity?: string;
+        workspaceKey: string;
+      }) => boolean)
     | undefined;
   const isCuaEnabledForContext = (context?: CuaProductMcpServerResolverContext): boolean =>
     // 保留 main 原有 gate 行为（避免回归）：dev/internal 特性开启时（ZCODE_CUA_DEV_MODE=1 或
@@ -3302,7 +3310,7 @@ export async function createServerHostServices(options: {
   // (`project.remote-project-required`). That is right for a source server
   // whose projects live in a synced store; the pi engine works on plain local
   // directories, so it keeps local ownership and gets the mkdir-on-demand path.
-  const piEngine = process.env["PI_ENGINE"] === "pi";
+  const piEngine = isPiGEngine();
   const services = createLocalServices({
     zcodeBuiltinProviderConfigFilePath: options.zcodeBuiltinProviderConfigFilePath,
     providerProvisioningTargetEnabled: options.providerProvisioningTargetEnabled,

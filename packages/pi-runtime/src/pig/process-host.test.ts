@@ -22,6 +22,31 @@ function spawnFake(child: FakeChild) {
 }
 
 describe("PigProcessHost", () => {
+  it("passes the workspace cwd and PiG agent dir to the child process", async () => {
+    const child = new FakeChild();
+    const spawnProcess = vi.fn(
+      (
+        _executable: string,
+        _args: readonly string[],
+        options: { cwd?: string; env?: NodeJS.ProcessEnv },
+      ) => {
+        expect(options.cwd).toBe("/workspace/project");
+        expect(options.env?.PIG_CODING_AGENT_DIR).toBe("/workspace/project/.pig-agent");
+        return child as never;
+      },
+    ) as never;
+    const host = new PigProcessHost({
+      executable: "pig-test",
+      agentDir: "/workspace/project/.pig-agent",
+      cwd: "/workspace/project",
+      spawnProcess,
+    });
+
+    await host.start();
+    expect(spawnProcess).toHaveBeenCalledOnce();
+    await host.shutdown();
+  });
+
   it("correlates responses and forwards notifications without exposing wire handling", async () => {
     const child = new FakeChild();
     const host = new PigProcessHost({

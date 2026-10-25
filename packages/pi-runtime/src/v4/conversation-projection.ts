@@ -12,7 +12,6 @@
  * keeps streaming updates pointing at the same row.
  */
 
-import type { AgentSession } from "@earendil-works/pi-coding-agent";
 import type { AssistantMessage, ToolResultMessage, UserMessage } from "@earendil-works/pi-ai";
 
 import {
@@ -29,7 +28,7 @@ import {
 } from "./projection.js";
 import { ConversationFrameBuilder, type ConversationWireFrame } from "./frames.js";
 import { readSessionView, type PiPendingApproval, type PiPhase } from "./session-view.js";
-import type { PiEvent, PiSessionHandle } from "../session-host.js";
+import type { PiGSessionEvent, RuntimeSessionHandle } from "../pig/session-host.js";
 
 export interface ConversationProjectionOptions {
   subscriptionId: string;
@@ -55,10 +54,16 @@ export class ConversationProjection {
   private phase: PiPhase = "completedSuccess";
   private title: string | undefined;
   private pendingApprovals: PiPendingApproval[] = [];
+  private queuedSteering: string[] = [];
+  private queuedFollowUp: string[] = [];
   private errorMessage: string | undefined;
   private errorCode: string | undefined;
-  private retry: { attempt: number; maxAttempts: number; delayMs: number; errorMessage: string } | null =
-    null;
+  private retry: {
+    attempt: number;
+    maxAttempts: number;
+    delayMs: number;
+    errorMessage: string;
+  } | null = null;
   /** Message identity → stable projection key, so updates patch the same rows. */
   private readonly messageKeys = new Map<string, string>();
   /** User messages already projected; they arrive twice (start and end). */
@@ -70,7 +75,7 @@ export class ConversationProjection {
   private sentInitialSnapshot = false;
 
   constructor(
-    private readonly session: PiSessionHandle,
+    private readonly session: RuntimeSessionHandle,
     private readonly options: ConversationProjectionOptions,
   ) {
     this.frames = new ConversationFrameBuilder(session.sessionId, options.subscriptionId);
@@ -93,7 +98,7 @@ export class ConversationProjection {
    * transcript instead of only events that arrive afterwards.
    */
   private backfillHistory(): void {
-    const state = this.session.session.state as unknown as {
+    const state = this.session.session.state as {
       messages?: readonly (UserMessage | AssistantMessage | ToolResultMessage)[];
       isStreaming?: boolean;
     };
@@ -125,9 +130,22 @@ export class ConversationProjection {
    * Deliberately does NOT re-send a snapshot. pi keeps every projected row in
    * memory and never loses a delta, so a client that resumes from its own
    * sequence is already consistent; emitting a snapshot here is what produced
-   * `frameAssemblyMetadataMismatch` and silently emptied the transcript.
+   * `frameAssemblyMetadataMismatch` and silently emptied the transcript. The
+   * service answers a resync by calling `emitRecoverySnapshot`.
    */
   resync(): void {}
+
+  /**
+   * Re-emit the authoritative state as a `recovery` delivery.
+   *
+   * The client's recovery flight settles only on a recovery-kind frame: an
+   * `online` snapshot applies but never settles, so a resync answered with an
+   * ACK alone deadlifts into `recoveryFrameTimedOut` whenever the stream is
+   * idle — exactly what the remote web view hit.
+   */
+  emitRecoverySnapshot(): void {
+    this.emitSnapshotFor("recovery");
+  }
 
   /** Every projected row in rowId order — used by rows/range pagination. */
   rowsSnapshot() {
@@ -139,8 +157,8 @@ export class ConversationProjection {
     return this.frames.currentSeq;
   }
 
-  private emitSnapshot(): void {
-    const view = readSessionView(this.session.session as AgentSession, {
+  private emitSnapshotFor(deliveryKind: "initial" | "online" | "recovery"): void {
+    const view = readSessionView(this.session.session, {
       phase: this.phase,
       title: this.title,
       pendingApprovals: this.pendingApprovals,
@@ -150,7 +168,15 @@ export class ConversationProjection {
     });
     // `onDynamicConversationFrame` carries the wire envelope, not the bare frame.
     this.sentInitialSnapshot = true;
-    this.options.emit(this.frames.wrap(this.frames.snapshot(view, snapshotRows(this.state))));
+    this.options.emit(
+      this.frames.wrapFor(this.frames.snapshot(view, snapshotRows(this.state)), deliveryKind),
+    );
+  }
+
+  private emitSnapshot(): void {
+    // The projection's first frame must stay `initial` (the client consumes
+    // awaitingInitial only for that kind), later ones are `online`.
+    this.emitSnapshotFor("initial");
   }
 
   private emitDeltas(deltas: ProjectedDelta[]): void {
@@ -179,7 +205,7 @@ export class ConversationProjection {
         // stop control showing after the turn finished, because the UI renders
         // running/idle from `control`.
         patch: (() => {
-          const view = readSessionView(this.session.session as AgentSession, {
+          const view = readSessionView(this.session.session, {
             phase: this.phase,
             title: this.title,
             pendingApprovals: this.pendingApprovals,
@@ -219,7 +245,7 @@ export class ConversationProjection {
     ]);
   }
 
-  private handle(event: PiEvent): void {
+  private handle(event: PiGSessionEvent): void {
     switch (event.type) {
       case "agent_start": {
         this.phase = "running";
@@ -348,9 +374,54 @@ export class ConversationProjection {
         return;
       }
 
+      case "queue_update": {
+        // pi 的插队/跟随队列（文本形式）。镜像到实例字段供导出/导入使用，
+        // 并像审批一样走 state.updated 让 UI 的排队横幅实时亮起。
+        const e = event as { steering?: readonly string[]; followUp?: readonly string[] };
+        this.queuedSteering = [...(e.steering ?? [])];
+        this.queuedFollowUp = [...(e.followUp ?? [])];
+        this.emitStateUpdate();
+        return;
+      }
+
       default:
         return;
     }
+  }
+
+  /** 当前排队（steer/followUp）文本，导出用。 */
+  getQueuedMessages(): { steering: string[]; followUp: string[] } {
+    return { steering: [...this.queuedSteering], followUp: [...this.queuedFollowUp] };
+  }
+
+  /** 覆盖排队内容（导入用）。直接调用 pi 的 steer/followUp 重新入队。 */
+  async restoreQueuedMessages(
+    steering: readonly string[],
+    followUp: readonly string[],
+  ): Promise<void> {
+    const session = this.session.session as unknown as {
+      steer?: (text: string) => Promise<unknown> | unknown;
+      followUp?: (text: string) => Promise<unknown> | unknown;
+      prompt?: (text: string, options?: unknown) => Promise<unknown>;
+    };
+    for (const text of steering) {
+      await session.steer?.(text);
+    }
+    for (const text of followUp) {
+      await session.followUp?.(text);
+    }
+    this.queuedSteering = [...steering];
+    this.queuedFollowUp = [...followUp];
+  }
+
+  /** 清空两侧队列（导入替换语义）。 */
+  async clearQueuedMessages(): Promise<void> {
+    const session = this.session.session as unknown as {
+      clearQueue?: () => Promise<unknown> | unknown;
+    };
+    await session.clearQueue?.();
+    this.queuedSteering = [];
+    this.queuedFollowUp = [];
   }
 
   /**
@@ -362,7 +433,10 @@ export class ConversationProjection {
    * as its `message_start` sibling in practice, but not always — so the key is
    * also derived from (role, timestamp), which is stable across re-sends.
    */
-  private projectMessage(message: UserMessage | AssistantMessage | ToolResultMessage, streaming: boolean): ProjectedDelta[] {
+  private projectMessage(
+    message: UserMessage | AssistantMessage | ToolResultMessage,
+    streaming: boolean,
+  ): ProjectedDelta[] {
     const role = (message as { role?: string }).role;
     const timestamp = (message as { timestamp?: number }).timestamp ?? 0;
     const identity = `${role}:${timestamp}`;

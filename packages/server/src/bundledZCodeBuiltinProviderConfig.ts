@@ -17,7 +17,7 @@ export function readBundledZCodeBuiltinProviderConfig(): string {
   // have no injected constant at all — an empty catalog is the correct answer
   // there rather than a startup failure. ZCode's own engine still requires it:
   // without the flag that the pi engine is active, keep the hard failure.
-  if (process.env["PI_ENGINE"] === "pi") {
+  if (process.env["PI_ENGINE"] === "pig") {
     // Shape required by `decodeZCodeBuiltinRelease` → `parseZCodeBuiltinProviderConfigRules`
     // → `parseZCodeBuiltinModelConfigRules`. Both are strict objects of rule
     // arrays; empty arrays mean "no bundled providers/models", which is what the

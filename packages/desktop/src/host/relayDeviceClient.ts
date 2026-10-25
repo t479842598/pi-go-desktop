@@ -36,7 +36,7 @@ export function computeProof(
 }
 
 export interface RelayDeviceClientOptions {
-  /** 例：wss://zcode.tang74.top/ws */
+  /** 例：wss://pi.tang74.top/ws */
   relayWsUrl: string;
   deviceMid: string;
   passHash: string;
@@ -76,7 +76,9 @@ export interface RelayDeviceConnection {
    * Initialize 必须在这之后再发：早于此时刻发出去的会落在协议层建立之前没人接收，
    * 手机端的请求就会一直排队（已配对但一直加载工作区）。
    */
-  readonly onBridgeOpened: (listener: (identity: RelayFrameIdentity) => void) => { dispose(): void };
+  readonly onBridgeOpened: (listener: (identity: RelayFrameIdentity) => void) => {
+    dispose(): void;
+  };
   /** 收到手机端第一条 rpc-frame（用于停止重发 Initialize） */
   readonly onRpcFrameReceived: (listener: () => void) => { dispose(): void };
   dispose(): void;
@@ -261,15 +263,19 @@ export function connectRelayDevice(
           if (pairStatus === "matched" && message.pair_status !== "matched") {
             relaySocket.setFrameIdentity(undefined);
             bridgeIdentity = undefined;
-            controlQueue = controlQueue.then(async () => {
-              // waiting 可能在前一条异步 prepare 未完成时到达，队列执行时再次失效身份。
-              relaySocket.setFrameIdentity(undefined);
-              bridgeIdentity = undefined;
-              await options.releaseBridge?.();
-            }).catch((error: unknown) => {
-              log(`relay bridge release failed: ${error instanceof Error ? error.message : "unknown"}`);
-              if (!disposed) ws.close();
-            });
+            controlQueue = controlQueue
+              .then(async () => {
+                // waiting 可能在前一条异步 prepare 未完成时到达，队列执行时再次失效身份。
+                relaySocket.setFrameIdentity(undefined);
+                bridgeIdentity = undefined;
+                await options.releaseBridge?.();
+              })
+              .catch((error: unknown) => {
+                log(
+                  `relay bridge release failed: ${error instanceof Error ? error.message : "unknown"}`,
+                );
+                if (!disposed) ws.close();
+              });
           }
           setPairStatus(message.pair_status === "matched" ? "matched" : "waiting");
           return;
@@ -284,37 +290,42 @@ export function connectRelayDevice(
             // 否则会被 RelayMessageAssembler 的字段校验静默丢弃、手机侧超时。
             // 工作区/任务名单要从 Setting 与 zcode-task 服务异步取，而这里是同步的
             // onMessage 回调，所以自己去 await，不阻塞后续帧的处理。
-            controlQueue = controlQueue.then(async () => {
-              if (disposed) return;
-              const reply = await appResponder?.handle(
-                payload as unknown as { zcode_type: string },
-              );
-              if (!reply || disposed) return;
-              let opened: RelayFrameIdentity | undefined;
-              if (reply.zcode_type === "workspace-bridge-ready") {
-                opened = {
-                  bridgeSessionId: String(reply.bridgeSessionId ?? ""),
-                  ...(typeof reply.bridgeGeneration === "number"
-                    ? { bridgeGeneration: reply.bridgeGeneration } : {}),
-                  ...(typeof reply.recoveryId === "string" ? { recoveryId: reply.recoveryId } : {}),
-                };
-                if (!opened.bridgeSessionId) throw new Error("missing bridge identity");
-                if (!sameRelayFrameIdentity(bridgeIdentity, opened)) {
-                  // 暂停旧入站及分片；prepare 同步关闭旧出站门后等待 attachment 清理。
-                  relaySocket.setFrameIdentity(undefined);
-                  await options.prepareBridge?.(relaySocket.socket, opened);
-                  if (disposed) return;
-                  bridgeIdentity = opened;
-                  relaySocket.setFrameIdentity(opened);
+            controlQueue = controlQueue
+              .then(async () => {
+                if (disposed) return;
+                const reply = await appResponder?.handle(
+                  payload as unknown as { zcode_type: string },
+                );
+                if (!reply || disposed) return;
+                let opened: RelayFrameIdentity | undefined;
+                if (reply.zcode_type === "workspace-bridge-ready") {
+                  opened = {
+                    bridgeSessionId: String(reply.bridgeSessionId ?? ""),
+                    ...(typeof reply.bridgeGeneration === "number"
+                      ? { bridgeGeneration: reply.bridgeGeneration }
+                      : {}),
+                    ...(typeof reply.recoveryId === "string"
+                      ? { recoveryId: reply.recoveryId }
+                      : {}),
+                  };
+                  if (!opened.bridgeSessionId) throw new Error("missing bridge identity");
+                  if (!sameRelayFrameIdentity(bridgeIdentity, opened)) {
+                    // 暂停旧入站及分片；prepare 同步关闭旧出站门后等待 attachment 清理。
+                    relaySocket.setFrameIdentity(undefined);
+                    await options.prepareBridge?.(relaySocket.socket, opened);
+                    if (disposed) return;
+                    bridgeIdentity = opened;
+                    relaySocket.setFrameIdentity(opened);
+                  }
                 }
-              }
-              log(`relay app <- ${zcodeType} -> ${String(reply.zcode_type)}`);
-              send({ type: "data", payload: reply, client_ts: Date.now() });
-              if (opened) bridgeOpenedEmitter.fire(opened);
-            }).catch((error: unknown) => {
-              log(`relay app failed: ${error instanceof Error ? error.message : "unknown"}`);
-              if (!disposed) ws.close();
-            });
+                log(`relay app <- ${zcodeType} -> ${String(reply.zcode_type)}`);
+                send({ type: "data", payload: reply, client_ts: Date.now() });
+                if (opened) bridgeOpenedEmitter.fire(opened);
+              })
+              .catch((error: unknown) => {
+                log(`relay app failed: ${error instanceof Error ? error.message : "unknown"}`);
+                if (!disposed) ws.close();
+              });
             return;
           }
           // 只有当前 bridge 校验并重组成功的完整消息才证明 Initialize 已被消费。

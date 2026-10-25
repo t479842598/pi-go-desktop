@@ -4016,11 +4016,13 @@ parentPort.on("message", async (e: Electron.MessageEvent) => {
         // import — and importing it inside createLocalServices pulled pi's Node
         // builtins into the ESM main bundle, where every launch failed with
         // "Dynamic require of child_process".
-        if (process.env["PI_ENGINE"] === "pi") {
+        if (process.env["PI_ENGINE"] === "pig") {
           const { mountPiServices } = await import("@pi/runtime");
-          mountPiServices(services);
+          const mounted = mountPiServices(services);
+          // Provider 配置双向同步（models.json ⇄ provider_config.json）随 host 生命周期。
+          await mounted.providerSettings.start();
         }
-        // 自建中继：让手机端（zcode.tang74.top/remote/v4）远程操控本机 Host。
+        // 自建中继：让手机端（pi.tang74.top/remote/v4）远程操控本机 Host。
         // 远程控制是可选能力，失败只记日志，绝不阻断本地启动。
         // 工作区名单取 main 传下来的 agentWarmupTargets（按最近使用排序，最多 3 个）；
         // 它比 msg.workspacePath 可靠 —— 后者可能只是默认的 home 目录，手机端拿到会打不开。
@@ -4115,6 +4117,22 @@ parentPort.on("message", async (e: Electron.MessageEvent) => {
                 return list;
               },
               resolveTasks: async () => {
+                // pi-zcode: PI 没有任务索引——远程端的项目/对话列表直接来自 pi 会话。
+                // IZCodeTaskService 在 pi 下是空实现，走它远程永远显示 0 个任务。
+                if (process.env["PI_ENGINE"] === "pig") {
+                  const { listPiSessions } = await import("@pi/runtime");
+                  const sessions = await listPiSessions();
+                  return sessions.slice(0, 200).map((session) =>
+                    toRelayAppTask({
+                      taskId: session.sessionId,
+                      title: session.title,
+                      workspacePath: session.cwd,
+                      createdAt: session.createdAt,
+                      updatedAt: session.modifiedAt,
+                      status: "completed",
+                    }),
+                  );
+                }
                 const taskService = services.getOptional(IZCodeTaskService);
                 if (!taskService) return [];
                 const settings = await settingService.get();
@@ -4161,9 +4179,13 @@ parentPort.on("message", async (e: Electron.MessageEvent) => {
                 ]);
                 const agentService = services.getOptional(IZCodeAgentService);
                 const overlayed = agentService
-                  ? await overlayLiveRelayTaskStatus(result.items, (request) => agentService.listSessions(request))
+                  ? await overlayLiveRelayTaskStatus(result.items, (request) =>
+                      agentService.listSessions(request),
+                    )
                   : result.items;
-                return applyActiveRelayTaskStatus(overlayed, activeTaskIdsByKey).map(toRelayAppTask);
+                return applyActiveRelayTaskStatus(overlayed, activeTaskIdsByKey).map(
+                  toRelayAppTask,
+                );
               },
               ...(msg.workspacePath &&
               relayWorkspaces.some((item) => item.workspacePath === msg.workspacePath)

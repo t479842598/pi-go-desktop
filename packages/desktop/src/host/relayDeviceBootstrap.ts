@@ -1,17 +1,13 @@
 /**
  * 桌面端启动自建中继桥：连自己的 relay → 认证 → 把连接挂成 RPC 服务端，
- * 让手机端（zcode.tang74.top/remote/v4）能远程操控本机 Host。
+ * 让手机端（pi.tang74.top/remote/v4）能远程操控本机 Host。
  *
  * 默认目标可被环境变量覆盖：
- *   ZCODE_SELFHOST_RELAY_WS_URL=wss://zcode.tang74.top/ws
+ *   ZCODE_SELFHOST_RELAY_WS_URL=wss://pi.tang74.top/ws
  *   ZCODE_SELFHOST_RELAY_DISABLED=1 关闭桥接
  */
-import {
-  mkdirSync,
-  readFileSync,
-  writeFileSync,
-} from "node:fs";
-import { homedir } from "node:os";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { getZCodeDataRootDir } from "@zcode/services/node";
 import { dirname, join } from "node:path";
 import type { ServiceCollection } from "@zcode/services";
 import { connectRelayDevice, createPassHash } from "./relayDeviceClient.js";
@@ -19,9 +15,9 @@ import { createRelayDebugLog } from "./relayDebugLog.js";
 import { createRelayBridgeLifecycle } from "./relayBridgeLifecycle.js";
 import type { RelayAppTask } from "./relayAppProtocol.js";
 
-export const DEFAULT_RELAY_WS_URL = "wss://zcode.tang74.top/ws";
+export const DEFAULT_RELAY_WS_URL = "wss://pi.tang74.top/ws";
 /** 手机端工作台地址（自托管静态站） */
-export const DEFAULT_WEB_REMOTE_URL = "https://zcode.tang74.top/remote/v4/";
+export const DEFAULT_WEB_REMOTE_URL = "https://pi.tang74.top/remote/v4/";
 
 const RECONNECT_MIN_MS = 1_000;
 const RECONNECT_MAX_MS = 30_000;
@@ -36,7 +32,10 @@ export function resolveWebRemoteUrl(env: NodeJS.ProcessEnv = process.env): strin
 }
 
 function identityFilePath(): string {
-  const home = process.env.ZCODE_HOME?.trim() || join(homedir(), ".zcode");
+  // pi-zcode: 身份落在各自产品的数据根（PI 是 ~/.pi-web，ZCode 是 ~/.zcode）。
+  // 共用一个文件会让两个应用在中继上抢同一 device_sid 互相踢下线，
+  // 手机端扫码配到的设备取决于谁最后连上。
+  const home = process.env.ZCODE_HOME?.trim() || getZCodeDataRootDir();
   return join(home, "relay-identity.json");
 }
 

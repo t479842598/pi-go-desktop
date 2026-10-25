@@ -15,7 +15,6 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { Emitter } from "@zcode/rpc";
 import type { Event } from "@zcode/rpc";
 import {
@@ -33,14 +32,17 @@ import type {
   V4SessionsIndexSubscribeResult,
 } from "@zcode/shared/zcode-protocol-v4";
 
-import { PiSessionHost, type PiSessionHandle } from "../session-host.js";
-import { locateSession } from "../session-locator.js";
+import {
+  PiGSessionHost,
+  type RuntimeSessionHandle,
+  type RuntimeSessionHost,
+} from "../pig/session-host.js";
 import { listPiSessions } from "../session-list.js";
 import { ConversationProjection } from "./conversation-projection.js";
 import { toWireFrame, type ConversationWireFrame } from "./frames.js";
 
 export interface PiAgentServiceOptions {
-  host?: PiSessionHost;
+  host?: RuntimeSessionHost;
   /** Session directory override; pi's default applies when omitted. */
   sessionDir?: string;
 }
@@ -60,8 +62,13 @@ interface Subscription {
  * is by member name, so unimplemented members are simply not callable.
  */
 export class PiAgentService {
-  private readonly host: PiSessionHost;
+  private readonly host: RuntimeSessionHost;
   private readonly subscriptions = new Map<string, Subscription>();
+  /** sessionId → 当前活跃 projection（队列导出/导入入口）。 */
+  private readonly sessionProjections = new Map<
+    string,
+    import("./conversation-projection.js").ConversationProjection
+  >();
   /** sessions-index subscription id → workspace id (the topic's second half). */
   private readonly indexSubscriptions = new Map<string, string>();
   private readonly frameEmitter = new Emitter<unknown>();
@@ -79,7 +86,9 @@ export class PiAgentService {
   private assemblerProbe: TopicWireFrameAssembler<unknown> | null = null;
 
   constructor(options: PiAgentServiceOptions = {}) {
-    this.host = options.host ?? new PiSessionHost({ sessionDir: options.sessionDir });
+    this.host =
+      options.host ??
+      new PiGSessionHost({ ...(options.sessionDir ? { sessionRoot: options.sessionDir } : {}) });
   }
 
   // ── handshake ────────────────────────────────────────────────────────────
@@ -176,28 +185,66 @@ export class PiAgentService {
     });
     projection.start();
 
+    // 每个会话只保留一个活跃 projection 引用（订阅替换时已 retire 旧的），
+    // 队列导出/导入按 sessionId 找到它。
+    this.sessionProjections.set(handle.sessionId, projection);
+
     return {
       ack: { subscriptionId, mode: "snapshot", logEpoch: handle.sessionId },
     };
   }
 
+  /**
+   * 队列导出/导入（pi-web 的排队横幅同款能力）。
+   * 未订阅的会话返回空队列——pi 的队列在内存里，未加载即无内容可导。
+   */
+  getQueueData(params: { sessionId: string }): {
+    sessionId: string;
+    steering: string[];
+    followUp: string[];
+  } {
+    const projection = this.sessionProjections.get(params.sessionId);
+    const queued = projection?.getQueuedMessages() ?? { steering: [], followUp: [] };
+    return { sessionId: params.sessionId, ...queued };
+  }
+
+  async importQueueData(params: {
+    sessionId: string;
+    steering: readonly string[];
+    followUp: readonly string[];
+  }): Promise<{ ok: true }> {
+    const projection = this.sessionProjections.get(params.sessionId);
+    if (!projection) throw new Error(`session not subscribed: ${params.sessionId}`);
+    // 替换语义：先清空再入队，与 pi-web 的导入行为一致。
+    await projection.clearQueuedMessages();
+    await projection.restoreQueuedMessages(params.steering, params.followUp);
+    return { ok: true };
+  }
+
   async resyncConversationV4(params: {
     subscriptionId: string;
+    base?: { logEpoch: string; seq: number } | null;
+    forceSnapshot?: boolean;
   }): Promise<V4ConversationResyncResult> {
     const subscription = this.subscriptions.get(params.subscriptionId);
     if (!subscription) {
       throw new Error(`Unknown subscription: ${params.subscriptionId}`);
     }
-    // Answer with the same subscription id and let the projection continue its
-    // own sequence. `resume` tells the UI to expect deltas from where it stopped
-    // rather than a fresh snapshot: a snapshot mid-stream is rejected by the
-    // assembler (either a metadata mismatch or an ordinal conflict), and every
-    // later frame is then dropped, leaving the transcript empty.
-    subscription.projection.resync();
+    // Answer with the same subscription id and a fresh authoritative snapshot
+    // delivered as `recovery`. Two earlier shapes both broke:
+    //   - a mid-stream *online* snapshot was rejected by the assembler
+    //     (metadata mismatch / ordinal conflict) and emptied the transcript;
+    //   - an ACK with no frame left the client's recovery flight waiting for a
+    //     frame that never came — `recoveryFrameTimedOut` on every idle stream,
+    //     which is what the remote web view hit over the relay.
+    // The client's recovery contract accepts a recovery-delivered snapshot as
+    // the settlement frame, so the server always chooses `snapshot` here: pi
+    // keeps no delta log to replay a `resume` from an arbitrary base.
+    subscription.projection.emitRecoverySnapshot();
     return {
       ack: {
         subscriptionId: params.subscriptionId,
-        mode: "resume",
+        mode: "snapshot",
         logEpoch: subscription.logEpoch,
       },
     };
@@ -208,7 +255,7 @@ export class PiAgentService {
     const frame = wire.frame;
     const size =
       frame.payload.kind === "snapshot"
-        ? (frame.payload.snapshot as { rows?: { window?: unknown[] } }).rows?.window?.length ?? 0
+        ? ((frame.payload.snapshot as { rows?: { window?: unknown[] } }).rows?.window?.length ?? 0)
         : frame.payload.deltas.length;
     console.log(
       `[pi-engine] frame ${frame.payload.kind} ${wire.deliveryKind} ` +
@@ -289,7 +336,9 @@ export class PiAgentService {
     return { ack };
   }
 
-  async resyncSessionsIndexV4(params: { subscriptionId: string }): Promise<V4SessionsIndexSubscribeResult> {
+  async resyncSessionsIndexV4(params: {
+    subscriptionId: string;
+  }): Promise<V4SessionsIndexSubscribeResult> {
     const workspaceId = this.indexSubscriptions.get(params.subscriptionId);
     if (!workspaceId) throw new Error(`Unknown subscription: ${params.subscriptionId}`);
     void this.emitSessionsIndex(workspaceId, params.subscriptionId);
@@ -330,7 +379,12 @@ export class PiAgentService {
           sentAt: Date.now(),
           payload: {
             kind: "snapshot",
-            snapshot: { protocolVersion: 1, workspaceId, logEpoch: workspaceId, sessions: summaries },
+            snapshot: {
+              protocolVersion: 1,
+              workspaceId,
+              logEpoch: workspaceId,
+              sessions: summaries,
+            },
           },
         },
         1,
@@ -391,13 +445,18 @@ export class PiAgentService {
       if (commandType === "sendText") {
         const text = typeof payload.text === "string" ? payload.text : "";
         if (!text) return this.reject(commandId, "emptyText");
-        const cwd =
-          typeof payload.workspaceId === "string" ? payload.workspaceId : process.cwd();
+        const cwd = typeof payload.workspaceId === "string" ? payload.workspaceId : process.cwd();
         const created = await this.host.open({ cwd });
         console.log(`[pi-engine] prompt(new session ${created.sessionId}): ${text.slice(0, 60)}`);
-        void created.session.prompt(text).catch((error: unknown) => {
-          console.error("[pi-engine] prompt failed", error);
-        });
+        try {
+          await created.session.prompt(text);
+        } catch (error) {
+          this.host.close(created.sessionId);
+          return this.reject(
+            commandId,
+            `pigPromptFailed:${error instanceof Error ? error.message : String(error)}`,
+          );
+        }
         return {
           ...this.accept(commandId),
           result: {
@@ -428,10 +487,15 @@ export class PiAgentService {
               ? { streamingBehavior: "followUp" as const }
               : undefined;
         console.log(`[pi-engine] prompt -> ${handle.sessionId}: ${text.slice(0, 60)}`);
-        void handle.session.prompt(text, options).catch((error: unknown) => {
-          console.error("[pi-engine] prompt failed", error);
-        });
-        return this.accept(commandId);
+        try {
+          await handle.session.prompt(text, options);
+          return this.accept(commandId);
+        } catch (error) {
+          return this.reject(
+            commandId,
+            `pigPromptFailed:${error instanceof Error ? error.message : String(error)}`,
+          );
+        }
       }
 
       case "stop": {
@@ -484,20 +548,8 @@ export class PiAgentService {
    * `fork` on a live session rewrites its identity in place, so a wrapper left
    * registered under the old id serves already-forked state.
    */
-  private async forkSession(handle: PiSessionHandle, entryId: string): Promise<string> {
-    const manager = handle.sessionManager;
-    const sessionFile = manager.getSessionFile();
-    if (!sessionFile) throw new Error("fault.fork.unpersisted");
-
-    const branched = manager.createBranchedSession(entryId);
-    if (!branched) throw new Error("fault.fork.failed");
-
-    const forked = SessionManager.open(branched, manager.getSessionDir());
-    const newSessionId = forked.getSessionId();
-
-    // Drop the source wrapper: forks are new sessions, never the old one renamed.
-    this.host.close(handle.sessionId);
-    return newSessionId;
+  private async forkSession(handle: RuntimeSessionHandle, entryId: string): Promise<string> {
+    return this.host.fork(handle, entryId);
   }
 
   async queryConversationCommandsV4(_params: unknown): Promise<CommandsQueryResult> {
@@ -510,7 +562,11 @@ export class PiAgentService {
   // These are legal empty answers: stateless, side-effect free queries the UI
   // renders as "nothing here" rather than acting on.
 
-  async conversationRowsRangeV4(params: { sessionId: string; beforeRowId?: number; limit: number }) {
+  async conversationRowsRangeV4(params: {
+    sessionId: string;
+    beforeRowId?: number;
+    limit: number;
+  }) {
     const subscription = this.findSubscriptionBySession(params.sessionId);
     const rows = subscription ? subscription.projection.rowsSnapshot() : [];
     const before = params.beforeRowId ?? Number.POSITIVE_INFINITY;
@@ -629,13 +685,10 @@ export class PiAgentService {
    * The file header supplies the cwd, so a session opened from the sidebar
    * resumes in its own project instead of the host's working directory.
    */
-  private async ensureSession(sessionId: string): Promise<PiSessionHandle> {
+  private async ensureSession(sessionId: string): Promise<RuntimeSessionHandle> {
     const live = this.host.get(sessionId);
     if (live) return live;
-
-    const location = await locateSession(sessionId);
-    if (!location) throw new Error(`Unknown session: ${sessionId}`);
-    return this.host.open({ cwd: location.cwd, sessionFile: location.sessionFile });
+    return this.host.open({ cwd: process.cwd(), sessionId });
   }
 }
 
@@ -646,7 +699,7 @@ export class PiAgentService {
  * and rejects one otherwise, so this has to be read from the live state rather
  * than assumed.
  */
-function isSessionStreaming(handle: PiSessionHandle): boolean {
-  const state = handle.session.state as unknown as { isStreaming?: boolean };
+function isSessionStreaming(handle: RuntimeSessionHandle): boolean {
+  const state = handle.session.state as { isStreaming?: boolean };
   return Boolean(state.isStreaming);
 }

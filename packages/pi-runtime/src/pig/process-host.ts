@@ -18,6 +18,8 @@ export interface PigProcessHostOptions {
   args?: readonly string[];
   /** Agent directory passed through PIG_CODING_AGENT_DIR. */
   agentDir?: string;
+  /** Working directory for the owned PiG process and newly created sessions. */
+  cwd?: string;
   /** Spawn dependency for tests and alternate process hosts. */
   spawnProcess?: typeof spawn;
   /** Per-command timeout; callers can override for long-running commands. */
@@ -54,6 +56,7 @@ export class PigProcessHost implements PigRuntimeContract {
   private readonly executable: string;
   private readonly args: readonly string[];
   private readonly agentDir: string;
+  private readonly cwd: string | undefined;
   private readonly defaultTimeoutMs: number;
   private readonly spawnProcess: typeof spawn;
   private readonly log: NonNullable<PigProcessHostOptions["log"]>;
@@ -67,6 +70,7 @@ export class PigProcessHost implements PigRuntimeContract {
     this.executable = options.executable ?? process.env.PIG_EXECUTABLE ?? "pig";
     this.args = options.args ?? ["--mode", "rpc"];
     this.agentDir = options.agentDir ?? getPiGAgentDir();
+    this.cwd = options.cwd;
     this.defaultTimeoutMs = options.defaultTimeoutMs ?? 30_000;
     this.spawnProcess = options.spawnProcess ?? spawn;
     this.log = options.log ?? (() => {});
@@ -205,6 +209,7 @@ export class PigProcessHost implements PigRuntimeContract {
     let child: SpawnedProcess;
     try {
       child = this.spawnProcess(this.executable, [...this.args], {
+        ...(this.cwd ? { cwd: this.cwd } : {}),
         env: {
           ...process.env,
           PIG_CODING_AGENT_DIR: this.agentDir,

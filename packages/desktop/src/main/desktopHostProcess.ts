@@ -255,6 +255,11 @@ export function spawnHostProcess(
       ...buildHostProcessEnv(dependencies.hostProcessLocalEnv),
       ...buildHostE2ECoverageEnv(),
       ZCODE_PROCESS_LABEL: label,
+      // pi-zcode: main pins PI_ENGINE for PI builds (identity-based, since a
+      // Finder launch inherits no env). The fork replaces the parent env, so
+      // forward it explicitly or the host falls back to the ZCode engine and
+      // the app shows ZCode's sessions and models.
+      ...(process.env.PI_ENGINE === "pig" ? { PI_ENGINE: "pig" } : {}),
       // macOS-only: the Computer Use Helper launcher runs inside this forked host utilityProcess, whose
       // code-signing identity is a nested Electron helper (NOT dev.zcode.app). Publish THIS (main
       // Electron) process's pid — which IS dev.zcode.app — so helperLauncher passes it as

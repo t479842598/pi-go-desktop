@@ -13,19 +13,19 @@
 
 import { IZCodeAgentService, ServiceCollection } from "@zcode/services";
 
-import { PiSessionHost } from "./session-host.js";
+import { PiGSessionHost, type RuntimeSessionHost } from "./pig/session-host.js";
 import { PiAgentService } from "./v4/pi-agent-service.js";
 
 export interface PiServiceAssemblyOptions {
   /** Live pi sessions shared by every pi-backed service. */
-  host?: PiSessionHost;
+  host?: RuntimeSessionHost;
   sessionDir?: string;
 }
 
 export interface PiServiceAssembly {
   collection: ServiceCollection;
   agent: PiAgentService;
-  host: PiSessionHost;
+  host: RuntimeSessionHost;
   dispose(): Promise<void>;
 }
 
@@ -37,7 +37,9 @@ export interface PiServiceAssembly {
  * surfaces the gap at its call site instead of hiding it behind a stub.
  */
 export function createPiServices(options: PiServiceAssemblyOptions = {}): PiServiceAssembly {
-  const host = options.host ?? new PiSessionHost({ sessionDir: options.sessionDir });
+  const host =
+    options.host ??
+    new PiGSessionHost({ ...(options.sessionDir ? { sessionRoot: options.sessionDir } : {}) });
   const agent = new PiAgentService({ host });
   const collection = new ServiceCollection();
 

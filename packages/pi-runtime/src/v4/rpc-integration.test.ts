@@ -27,7 +27,9 @@ import {
 import { PiSessionHost } from "../session-host.js";
 import { createPiServices } from "../services-assembly.js";
 
-async function withServices<T>(run: (services: ReturnType<typeof createPiServices>, cwd: string) => Promise<T>) {
+async function withServices<T>(
+  run: (services: ReturnType<typeof createPiServices>, cwd: string) => Promise<T>,
+) {
   const sessionDir = await mkdtemp(join(tmpdir(), "pi-zcode-rpc-"));
   const cwd = await mkdtemp(join(tmpdir(), "pi-zcode-rpc-cwd-"));
   const host = new PiSessionHost({ sessionDir });
@@ -43,7 +45,9 @@ async function withServices<T>(run: (services: ReturnType<typeof createPiService
 
 test("zcode-agent resolves through the collection by its real channel name", async () => {
   await withServices(async (services, cwd) => {
-    const registered = services.collection.get({ channelName: ServiceChannels.ZCodeAgent } as never);
+    const registered = services.collection.get({
+      channelName: ServiceChannels.ZCodeAgent,
+    } as never);
     assert.equal(registered, services.agent);
 
     const hello = await services.agent.helloConversationV4();
@@ -70,6 +74,8 @@ test("zcode-agent resolves through the collection by its real channel name", asy
 
 test("an unregistered channel throws instead of returning empty data", async () => {
   await withServices(async (services) => {
-    assert.throws(() => services.collection.get({ channelName: "coding-plan-subscription" } as never));
+    assert.throws(() =>
+      services.collection.get({ channelName: "coding-plan-subscription" } as never),
+    );
   });
 });

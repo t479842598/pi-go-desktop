@@ -12,6 +12,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const originalHome = process.env.HOME;
+const originalPiEngine = process.env.PI_ENGINE;
 const tempHomes: string[] = [];
 
 function makeTempHome(): string {
@@ -22,6 +23,8 @@ function makeTempHome(): string {
 
 afterEach(() => {
   process.env.HOME = originalHome;
+  if (originalPiEngine === undefined) delete process.env.PI_ENGINE;
+  else process.env.PI_ENGINE = originalPiEngine;
   while (tempHomes.length > 0) {
     const home = tempHomes.pop();
     if (home) {
@@ -31,6 +34,33 @@ afterEach(() => {
 });
 
 describe("paths", () => {
+  it("routes PI_ENGINE=pig to the isolated PiG data roots", async () => {
+    const home = makeTempHome();
+    process.env.HOME = home;
+    process.env.PI_ENGINE = "pig";
+    vi.resetModules();
+
+    const { getPiGAgentDir, getPiGSessionDir, getZCodeDataRootDir } =
+      await import("../src/paths.js");
+    const piRoot = join(home, ".pi-web");
+
+    expect(getZCodeDataRootDir()).toBe(piRoot);
+    expect(getPiGAgentDir()).toBe(join(piRoot, "pig-agent"));
+    expect(getPiGSessionDir()).toBe(join(piRoot, "pig-agent", "sessions"));
+  });
+
+  it("keeps the legacy PI_ENGINE=pi marker out of production data-root selection", async () => {
+    const home = makeTempHome();
+    process.env.HOME = home;
+    process.env.PI_ENGINE = "pi";
+    vi.resetModules();
+
+    const { getPiGAgentDir, getZCodeDataRootDir } = await import("../src/paths.js");
+
+    expect(getZCodeDataRootDir()).toBe(join(home, ".zcode"));
+    expect(getPiGAgentDir()).toBe(join(home, ".pi-web", "pig-agent"));
+  });
+
   it("copyDataDirectory 会复制普通文件并跳过 workspace 里的共享目录软链", async () => {
     const oldBase = makeTempHome();
     const newBase = makeTempHome();

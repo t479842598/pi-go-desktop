@@ -20,7 +20,13 @@
 
 import type { AssistantMessage, ToolCall, UserMessage } from "@earendil-works/pi-ai";
 
-export type RowKind = "turnHeader" | "userInput" | "assistantText" | "reasoning" | "toolCall" | "subagent";
+export type RowKind =
+  | "turnHeader"
+  | "userInput"
+  | "assistantText"
+  | "reasoning"
+  | "toolCall"
+  | "subagent";
 
 /**
  * Row shape consumed by ZCode's projection store. Mirrors `conversationRowSchema`
@@ -161,11 +167,7 @@ function growText(state: ProjectionState, rowId: number, next: string): Projecte
   return [{ op: "row.upserted", row: updated }];
 }
 
-function setRowState(
-  state: ProjectionState,
-  rowId: number,
-  nextState: string,
-): ProjectedDelta[] {
+function setRowState(state: ProjectionState, rowId: number, nextState: string): ProjectedDelta[] {
   const row = state.rows.get(rowId);
   if (!row || row.state === nextState) return [];
   const updated = { ...row, state: nextState };
@@ -253,8 +255,7 @@ export function projectToolCall(
     const args = (call.arguments ?? {}) as Record<string, unknown>;
     Object.assign(row, {
       parentToolCallId: call.id,
-      subagentType:
-        typeof args.subagent_type === "string" ? args.subagent_type : "general-purpose",
+      subagentType: typeof args.subagent_type === "string" ? args.subagent_type : "general-purpose",
       status: "running",
       summaryText: typeof args.description === "string" ? args.description : "",
       startedAt: createdAt,

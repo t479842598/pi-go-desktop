@@ -74,7 +74,9 @@ function assistantMessage(
 test("empty snapshot satisfies the wire schema", () => {
   const builder = new ConversationFrameBuilder("sess-1", "sub-1");
   const frame = builder.snapshot(view(), []);
-  const parsed = conversationSnapshotSchema.safeParse(frame.payload.kind === "snapshot" ? frame.payload.snapshot : null);
+  const parsed = conversationSnapshotSchema.safeParse(
+    frame.payload.kind === "snapshot" ? frame.payload.snapshot : null,
+  );
   assert.ok(parsed.success, parsed.success ? "" : JSON.stringify(parsed.error.issues, null, 2));
 });
 
@@ -82,12 +84,9 @@ test("snapshot with projected rows satisfies the wire schema", () => {
   const state = createProjectionState();
   beginTurn(state, "turn-1");
   projectUserMessage(state, userMessage("hello"), "user-1");
-  projectAssistantMessage(
-    state,
-    assistantMessage([{ type: "text", text: "hi there" }]),
-    "asst-1",
-    { streaming: false },
-  );
+  projectAssistantMessage(state, assistantMessage([{ type: "text", text: "hi there" }]), "asst-1", {
+    streaming: false,
+  });
 
   const builder = new ConversationFrameBuilder("sess-1", "sub-1");
   const frame = builder.snapshot(view(), snapshotRows(state));
@@ -141,10 +140,7 @@ test("deltas frame satisfies the wire schema", () => {
   const frame = builder.deltas(deltas);
   assert.ok(frame);
   const parsed = conversationTopicFrameSchema.safeParse(frame);
-  assert.ok(
-    parsed.success,
-    parsed.success ? "" : JSON.stringify(parsed.error.issues, null, 2),
-  );
+  assert.ok(parsed.success, parsed.success ? "" : JSON.stringify(parsed.error.issues, null, 2));
 });
 
 test("streaming text grows by row.delta, not by re-sending the row", () => {
@@ -166,7 +162,5 @@ test("streaming text grows by row.delta, not by re-sending the row", () => {
 
   assert.equal(first[0]?.op, "row.appended");
   // rowId 1 is the turn header opened by beginTurn; the text row is 2.
-  assert.deepEqual(second, [
-    { op: "row.delta", rowId: 2, path: "text", append: "lo" },
-  ]);
+  assert.deepEqual(second, [{ op: "row.delta", rowId: 2, path: "text", append: "lo" }]);
 });

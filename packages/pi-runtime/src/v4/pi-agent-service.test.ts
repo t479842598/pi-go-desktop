@@ -25,7 +25,9 @@ import {
 import { PiSessionHost } from "../session-host.js";
 import { PiAgentService } from "./pi-agent-service.js";
 
-async function withService<T>(run: (service: PiAgentService, cwd: string) => Promise<T>): Promise<T> {
+async function withService<T>(
+  run: (service: PiAgentService, cwd: string) => Promise<T>,
+): Promise<T> {
   const cwd = await mkdtemp(join(tmpdir(), "pi-zcode-svc-"));
   const sessionDir = await mkdtemp(join(tmpdir(), "pi-zcode-sessions-"));
   const host = new PiSessionHost({ sessionDir });
@@ -74,7 +76,8 @@ test("subscribe returns a schema-valid ACK", async () => {
     const ack = commandAckSchema.safeParse(created);
     assert.ok(ack.success, ack.success ? "" : JSON.stringify(ack.error.issues, null, 2));
 
-    const sessionId = created.result?.type === "createSession" ? created.result.sessionId : undefined;
+    const sessionId =
+      created.result?.type === "createSession" ? created.result.sessionId : undefined;
     assert.ok(sessionId, "createSession must report the new session id in result.sessionId");
 
     const result = await service.subscribeConversationV4({ sessionId: sessionId! });
@@ -92,7 +95,8 @@ test("subscribing emits a schema-valid opening snapshot wire frame", async () =>
       // The command name is `envelope.type`; `payload` holds only arguments.
       envelope: { commandId: "cmd-1", type: "createSession", payload: { workspaceId: cwd } },
     });
-    const sessionId = created.result?.type === "createSession" ? created.result.sessionId : undefined;
+    const sessionId =
+      created.result?.type === "createSession" ? created.result.sessionId : undefined;
     assert.ok(sessionId, "createSession must report result.sessionId");
 
     // Attach before subscribing so the opening frame is captured.
@@ -115,7 +119,10 @@ test("subscribing emits a schema-valid opening snapshot wire frame", async () =>
     assert.equal(first.deliveryKind, "initial");
     assert.equal(first.frame.payload.kind, "snapshot");
     const snapshot = conversationSnapshotSchema.safeParse(first.frame.payload.snapshot);
-    assert.ok(snapshot.success, snapshot.success ? "" : JSON.stringify(snapshot.error.issues, null, 2));
+    assert.ok(
+      snapshot.success,
+      snapshot.success ? "" : JSON.stringify(snapshot.error.issues, null, 2),
+    );
   });
 });
 

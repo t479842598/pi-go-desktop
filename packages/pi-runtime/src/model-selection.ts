@@ -16,8 +16,8 @@ import type { Model } from "@earendil-works/pi-ai";
 import { Emitter } from "@zcode/rpc";
 import type { Event } from "@zcode/rpc";
 import { readFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { join } from "node:path";
+import { getPiGAgentDir } from "@zcode/services/node";
 
 /** Thinking levels ZCode knows; a model's own map decides which apply. */
 const DEFAULT_REASONING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
@@ -73,12 +73,91 @@ export class PiModelSelectionService {
     this.onChange.fire(await this.getView());
   }
 
+  /**
+   * Provider configuration summaries for the settings panel.
+   *
+   * Reads PiG's own sources of truth: `<pig-agent>/models.json` (user-configured
+   * providers: baseUrl + models + auth type) and `<pig-agent>/auth.json`
+   * (stored credentials), overlaid with every model the runtime can currently
+   * serve (builtin catalog included). The settings panel renders this instead
+   * of ZCode's provider registry, whose entries mean nothing under pi.
+   */
+  async getProviderConfigView(): Promise<Record<string, unknown>> {
+    const models = await this.availableModels();
+    const grouped = groupByProvider(models);
+    const modelsJson = readJsonFile(join(getPiGAgentDir(), "models.json"));
+    const authJson = readJsonFile(join(getPiGAgentDir(), "auth.json"));
+    const configured = (modelsJson?.providers ?? {}) as Record<
+      string,
+      { baseUrl?: string; name?: string; models?: unknown[] }
+    >;
+    const auth = (authJson ?? {}) as Record<string, unknown>;
+
+    const providers = grouped.map((provider) => {
+      const id = provider.providerId;
+      const stored = configured[id];
+      const credential = auth[id];
+      const authType =
+        credential && typeof credential === "object"
+          ? String((credential as { type?: string }).type ?? "api_key")
+          : credential
+            ? "api_key"
+            : "none";
+      return {
+        id,
+        name: stored?.name ?? id,
+        baseUrl: stored?.baseUrl ?? "",
+        authType,
+        authenticated: Boolean(credential),
+        source: stored ? "models.json" : "builtin",
+        models: provider.models.map((model) => ({
+          id: model.modelId,
+          name: model.modelId,
+          reasoningLevels: [] as string[],
+        })),
+      };
+    });
+    // Providers configured in models.json but currently missing from the
+    // runtime (bad key, unreachable catalog) still deserve a row.
+    for (const [id, stored] of Object.entries(configured)) {
+      if (grouped.some((provider) => provider.providerId === id)) continue;
+      providers.push({
+        id,
+        name: stored?.name ?? id,
+        baseUrl: stored?.baseUrl ?? "",
+        authType: auth[id] ? "api_key" : "none",
+        authenticated: Boolean(auth[id]),
+        source: "models.json",
+        models: Array.isArray(stored?.models)
+          ? (stored.models as Array<{ id?: string }>).map((model) => ({
+              id: model.id ?? "",
+              name: model.id ?? "",
+              reasoningLevels: [] as string[],
+            }))
+          : [],
+      });
+    }
+    return {
+      revision: ++this.revision,
+      configPath: join(getPiGAgentDir(), "models.json"),
+      authPath: join(getPiGAgentDir(), "auth.json"),
+      providers,
+    };
+  }
+
   dispose(): void {
     this.onChange.dispose();
   }
 
   private async availableModels(): Promise<readonly Model<never>[]> {
-    if (!this.runtime) this.runtime = await ModelRuntime.create();
+    if (!this.runtime) {
+      const agentDir = getPiGAgentDir();
+      this.runtime = await ModelRuntime.create({
+        authPath: join(agentDir, "auth.json"),
+        modelsPath: join(agentDir, "models.json"),
+        modelsStorePath: join(agentDir, "models-store.json"),
+      });
+    }
     return (await this.runtime.getAvailable()) as readonly Model<never>[];
   }
 }
@@ -129,7 +208,7 @@ interface ModelSelectionValue {
  */
 function readConfiguredDefault(): { providerId: string; modelId: string } | null {
   try {
-    const settingsPath = join(homedir(), ".pi", "agent", "settings.json");
+    const settingsPath = join(getPiGAgentDir(), "settings.json");
     const raw = readFileSync(settingsPath, "utf8");
     const settings = JSON.parse(raw) as { defaultProvider?: unknown; defaultModel?: unknown };
     if (typeof settings.defaultModel !== "string" || !settings.defaultModel.trim()) return null;
@@ -157,7 +236,20 @@ function readConfiguredDefault(): { providerId: string; modelId: string } | null
  * pi has no such split, so every model goes in `personalModelIds` (the list the
  * picker shows) and `modelOrder` fixes the display order.
  */
-function groupByProvider(models: readonly Model<never>[]): unknown[] {
+interface GroupedProviderModel {
+  modelId: string;
+  config: Record<string, unknown>;
+}
+
+interface GroupedProvider {
+  providerId: string;
+  providerName: string;
+  templateId: string;
+  config: Record<string, unknown>;
+  models: GroupedProviderModel[];
+}
+
+function groupByProvider(models: readonly Model<never>[]): GroupedProvider[] {
   const byProvider = new Map<string, Model<never>[]>();
   for (const model of models) {
     const provider = String((model as unknown as { provider?: unknown }).provider ?? "unknown");
@@ -222,7 +314,10 @@ function contextWindowOf(model: Model<never>): number {
 }
 
 function maxOutputTokensOf(model: Model<never>): number {
-  const record = model as unknown as { maxOutputTokens?: unknown; outputLimits?: { max?: unknown } };
+  const record = model as unknown as {
+    maxOutputTokens?: unknown;
+    outputLimits?: { max?: unknown };
+  };
   const direct = record.maxOutputTokens ?? record.outputLimits?.max;
   if (typeof direct === "number" && direct > 0) return Math.floor(direct);
   return Math.min(contextWindowOf(model), 32_768);
@@ -251,4 +346,14 @@ function reasoningLevelsOf(model: Model<never>): string[] {
   }
   const reasoning = (model as unknown as { reasoning?: unknown }).reasoning;
   return reasoning === false ? ["off"] : DEFAULT_REASONING_LEVELS;
+}
+
+/** Read a JSON file, returning null for any failure — config files are optional. */
+function readJsonFile(path: string): Record<string, unknown> | null {
+  try {
+    const parsed = JSON.parse(readFileSync(path, "utf8")) as unknown;
+    return parsed && typeof parsed === "object" ? (parsed as Record<string, unknown>) : null;
+  } catch {
+    return null;
+  }
 }

@@ -4,7 +4,7 @@
  */
 export const pigRuntimeModule = {
   id: "pig-runtime",
-  requires: ["rpc", "services", "shared"],
+  requires: ["provider", "provider-node", "rpc", "services", "shared"],
   provides: ["pig-runtime"],
-  publicEntrypoints: ["index.ts", "contract.ts"],
+  publicEntrypoints: ["index.ts", "contract.ts", "session-host.ts"],
 } as const;

@@ -129,7 +129,23 @@ export class PiSessionHost {
     for (const id of [...this.entries.keys()]) this.close(id);
   }
 
-  private adopt(session: AgentSession, cwd: string, sessionManager: SessionManager): PiSessionHandle {
+  async fork(handle: PiSessionHandle, entryId: string): Promise<string> {
+    const manager = handle.sessionManager;
+    const sessionFile = manager.getSessionFile();
+    if (!sessionFile) throw new Error("fault.fork.unpersisted");
+    const branched = manager.createBranchedSession(entryId);
+    if (!branched) throw new Error("fault.fork.failed");
+    const forked = SessionManager.open(branched, manager.getSessionDir());
+    const newSessionId = forked.getSessionId();
+    this.close(handle.sessionId);
+    return newSessionId;
+  }
+
+  private adopt(
+    session: AgentSession,
+    cwd: string,
+    sessionManager: SessionManager,
+  ): PiSessionHandle {
     const sessionId = session.sessionId;
 
     // A stale entry for the same id means the caller reopened from disk while

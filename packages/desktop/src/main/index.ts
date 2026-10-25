@@ -293,6 +293,16 @@ if (!app.isPackaged && process.env.ZCODE_DISABLE_FIXED_REMOTE_DEBUGGING_PORT !==
 }
 
 app.setName(runtimeApplicationName);
+// pi-zcode: engine selection must be identity-based for packaged builds. A
+// Finder launch inherits no environment, so PI_ENGINE would be absent, every
+// engine gate (services/node.ts, host, database startup) would fall back to
+// the bundled ZCode CLI, and the app would show ZCode's sessions and models.
+// Setting it here — before any utility process or agent spawn — lets the env
+// propagate: utility processes inherit the parent env, and the agent spawn
+// path folds process.env into its base env.
+if (runtimeApplicationName === "PI" || runtimeApplicationName === "PI Preview") {
+  process.env.PI_ENGINE = "pig";
+}
 if (runtimeHomePath) {
   app.setPath("home", runtimeHomePath);
 }
@@ -2519,7 +2529,26 @@ app.whenReady().then(async () => {
   // 分支不 bump 版本），会被 release minimalVersion 误判为"需强制升级"而启动秒退。force-update
   // 是面向打包发布客户端的安全门，对未打包 dev 运行时无意义。打包版 app.isPackaged === true，
   // gate 照常生效，对真实用户零影响。
-  const skipForceUpdateForLocalDevRuntime = !app.isPackaged;
+  //
+  // pi-zcode: PI is a separate application on its own release channel, so the
+  // ZCode feed can never describe it. Consulting that feed judged our version
+  // below `minimalVersion` and quit during startup — the packaged build's
+  // "launches then disappears" symptom.
+  //
+  // Keyed on the app's own identity rather than an env var: a packaged app is
+  // launched from Finder and inherits no environment, so an env-gated opt-out
+  // would never fire for a real user. runtimeApplicationName now derives from
+  // the same build identity electron-builder stamps (__ZCODE_PRODUCT_NAME__),
+  // so a packaged PI build resolves it to "PI" — app.getName() alone was not
+  // enough (the bundled package.json's name is "@zcode/desktop"), and Electron
+  // 41 has no app.getBundleId() to fall back on.
+  const isPiApplication =
+    process.env["PI_ENGINE"] === "pig" ||
+    runtimeApplicationName === "PI" ||
+    runtimeApplicationName === "PI Preview" ||
+    app.getName() === "PI" ||
+    app.getName() === "PI Preview";
+  const skipForceUpdateForLocalDevRuntime = !app.isPackaged || isPiApplication;
   const forceUpdateGuardResult =
     ZCODE_PRODUCT_FLAVOR === "production" && !skipForceUpdateForLocalDevRuntime
       ? await maybeBlockStartupForForceUpdate({

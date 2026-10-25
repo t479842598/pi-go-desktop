@@ -48,9 +48,13 @@ export function getZCodeDataRootDir(): string {
   // 互相覆盖 setting.json（recentProjects / 窗口尺寸 / 语言来回洗）、共用中继设备
   // 身份互相踢下线。PI_ENGINE 由 main 按应用身份锁定并转发给 host，这里按调用时
   // 环境取值，dev/打包/远端三条路径行为一致。
-  const isPiEngine = process.env.PI_ENGINE === "pi" || process.env.PI_ENGINE === "pig";
-  const rootName = isPiEngine ? ".pi-web" : ".zcode";
+  const rootName = isPiGEngine() ? ".pi-web" : ".zcode";
   return join(getDataBaseDir(), rootName);
+}
+
+/** 是否运行正式 PiG 引擎；旧 `PI_ENGINE=pi` 只保留给迁移期兼容读取。 */
+export function isPiGEngine(): boolean {
+  return process.env.PI_ENGINE === "pig";
 }
 
 /** PI/G 的统一 Agent 数据根；生产运行时禁止散落拼接 ~/.pi/agent。 */
