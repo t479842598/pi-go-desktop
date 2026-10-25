@@ -24,7 +24,6 @@ describe("planNestedRuntimeDependencyCopies", () => {
         ],
       ]),
       readVersion: (root) => (root.endsWith("signal-exit") ? "3.0.7" : undefined),
-      readVersion: (root) => (root.endsWith("signal-exit") ? "3.0.7" : undefined),
     });
 
     expect(plans).toEqual([]);

@@ -7,10 +7,14 @@ import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
-import { TaskIndexRepo } from "../packages/services/src/session/taskIndexRepo.js";
-import { AutomationRepo } from "../packages/services/src/session/automationRepo.js";
-import { OffPeakTaskRepo } from "../packages/services/src/session/offPeakTaskRepo.js";
-import { getTasksIndexDatabasePath, setDataBaseDir } from "../packages/services/src/paths.js";
+// 注意：必须引 packages/services/dist/*，不能引 src/*。
+// 该包 imports 把 #src/* 指向 ./dist/*，repo 内部因此加载 dist 那份模块；脚本若
+// 直接引 src，会得到第二份模块实例，setDataBaseDir() 只作用于其中一份，repo 仍按
+// 真实 ~/.zcode 建库，随后的只读打开必然 ENOENT。
+import { TaskIndexRepo } from "../packages/services/dist/session/taskIndexRepo.js";
+import { AutomationRepo } from "../packages/services/dist/session/automationRepo.js";
+import { OffPeakTaskRepo } from "../packages/services/dist/session/offPeakTaskRepo.js";
+import { getTasksIndexDatabasePath, setDataBaseDir } from "../packages/services/dist/paths.js";
 import { SQLITE_MIGRATIONS } from "../apps/zcode-cli/packages/adapters/src/storage/session-store/migrations.js";
 import { sqliteMigrations } from "../packages/shared/src/sqlite-migrations/index.js";
 import { assertAdditiveSchema, dumpSqliteSchema } from "./sqlite-schema-contract.mjs";

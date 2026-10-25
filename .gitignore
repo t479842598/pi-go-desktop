@@ -84,3 +84,6 @@ __pycache__/
 
 # 打包暂存目录的 macOS 索引标记，不是源码
 packages/desktop/build/.metadata_never_index
+
+# lrnev 运行时状态（agent 注册表），随会话变化，不入库
+.lrnev/agents/
