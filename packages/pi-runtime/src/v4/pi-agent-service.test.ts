@@ -224,7 +224,7 @@ class TestHandle implements RuntimeSessionHandle {
   }
 
   emit(event: PiGSessionEvent): void {
-    for (const listener of [...this.listeners]) listener(event);
+    for (const listener of this.listeners) listener(event);
   }
 }
 
