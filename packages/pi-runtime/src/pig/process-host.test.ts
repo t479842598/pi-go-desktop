@@ -33,19 +33,65 @@ describe("PigProcessHost", () => {
     const events: unknown[] = [];
     host.subscribe((event) => events.push(event));
 
-    const pending = host.request<{ ok: boolean }>("ping", { value: 1 });
+    const pending = host.request<{ ok: boolean }>("prompt", {
+      message: "hello",
+      streamingBehavior: "followUp",
+      id: "caller-id-must-not-win",
+      type: "caller-type-must-not-win",
+    });
     const request = await new Promise<string>((resolve) => {
       child.stdin.once("data", (chunk) => resolve(String(chunk).trim()));
     });
-    const parsed = JSON.parse(request) as { id: string; command: string; params: { value: number } };
-    expect(parsed.command).toBe("ping");
-    expect(parsed.params.value).toBe(1);
+    const parsed = JSON.parse(request) as {
+      id: string;
+      type: string;
+      message: string;
+      streamingBehavior: string;
+    };
+    expect(parsed.type).toBe("prompt");
+    expect(parsed.id).not.toBe("caller-id-must-not-win");
+    expect(parsed.message).toBe("hello");
+    expect(parsed.streamingBehavior).toBe("followUp");
 
     child.stdout.write(JSON.stringify({ type: "agent_start", sessionId: "s1" }) + "\n");
-    child.stdout.write(JSON.stringify({ id: parsed.id, type: "response", success: true, data: { ok: true } }) + "\n");
+    child.stdout.write(
+      JSON.stringify({
+        id: parsed.id,
+        type: "response",
+        command: "prompt",
+        success: true,
+        data: { ok: true },
+      }) + "\n",
+    );
 
     await expect(pending).resolves.toEqual({ ok: true });
     expect(events).toContainEqual({ type: "agent_start", sessionId: "s1" });
+    await host.shutdown();
+  });
+
+  it("maps PiG string errors to the local RPC error contract", async () => {
+    const child = new FakeChild();
+    const host = new PigProcessHost({ spawnProcess: spawnFake(child), defaultTimeoutMs: 100 });
+    const pending = host.request("get_state");
+    const request = await new Promise<string>((resolve) => {
+      child.stdin.once("data", (chunk) => resolve(String(chunk).trim()));
+    });
+    const { id } = JSON.parse(request) as { id: string };
+
+    child.stdout.write(
+      JSON.stringify({
+        id,
+        type: "response",
+        command: "get_state",
+        success: false,
+        error: "Unknown command: get_state",
+      }) + "\n",
+    );
+
+    await expect(pending).rejects.toMatchObject({
+      name: "PigRpcError",
+      message: "Unknown command: get_state",
+    });
     await host.shutdown();
   });
 
@@ -56,7 +102,7 @@ describe("PigProcessHost", () => {
       defaultTimeoutMs: 500,
     });
     await host.start();
-    const pending = host.request("slow");
+    const pending = host.request("get_state");
     await new Promise<void>((resolve) => child.stdin.once("data", () => resolve()));
     child.emit("close", 1, null);
     await expect(pending).rejects.toMatchObject({ code: "pig-process-exited" });

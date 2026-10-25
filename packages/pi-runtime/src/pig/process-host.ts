@@ -34,12 +34,12 @@ type PendingRequest = {
 };
 
 type PigResponse = {
-  id?: string | number;
+  id?: string | number | null;
   type?: string;
   command?: string;
   success?: boolean;
   data?: unknown;
-  error?: { code?: string; message?: string; details?: unknown };
+  error?: string | { code?: string; message?: string; details?: unknown };
 };
 
 type SpawnedProcess = ChildProcessWithoutNullStreams;
@@ -88,7 +88,10 @@ export class PigProcessHost implements PigRuntimeContract {
     options: PigRequestOptions = {},
   ): Promise<T> {
     if (options.signal?.aborted) {
-      throw new PigRuntimeError("pig-command-aborted", `PiG command aborted before start: ${command}`);
+      throw new PigRuntimeError(
+        "pig-command-aborted",
+        `PiG command aborted before start: ${command}`,
+      );
     }
     await this.start();
     if (!this.process || this.state !== "ready") {
@@ -97,7 +100,10 @@ export class PigProcessHost implements PigRuntimeContract {
 
     const id = `${process.pid}-${++this.requestSequence}`;
     const timeoutMs = options.timeoutMs ?? this.defaultTimeoutMs;
-    const wire = JSON.stringify({ id, type: "request", command, params });
+    // PiG follows Pi's RPC command union: the command name is the top-level
+    // `type`, and command fields are spread into the same JSON object. There is
+    // no generic {type:"request",command,params} envelope.
+    const wire = JSON.stringify({ ...params, id, type: command });
 
     return new Promise<T>((resolve, reject) => {
       let settled = false;
@@ -110,12 +116,7 @@ export class PigProcessHost implements PigRuntimeContract {
       const timer = setTimeout(() => {
         this.pending.delete(id);
         finish(() =>
-          reject(
-            new PigRuntimeError(
-              "pig-command-timeout",
-              `PiG command timed out: ${command}`,
-            ),
-          ),
+          reject(new PigRuntimeError("pig-command-timeout", `PiG command timed out: ${command}`)),
         );
       }, timeoutMs);
       timer.unref?.();
@@ -124,7 +125,9 @@ export class PigProcessHost implements PigRuntimeContract {
         if (!this.pending.has(id)) return;
         clearTimeout(timer);
         this.pending.delete(id);
-        finish(() => reject(new PigRuntimeError("pig-command-aborted", `PiG command aborted: ${command}`)));
+        finish(() =>
+          reject(new PigRuntimeError("pig-command-aborted", `PiG command aborted: ${command}`)),
+        );
       };
       this.pending.set(id, {
         command,
@@ -140,7 +143,15 @@ export class PigProcessHost implements PigRuntimeContract {
         options.signal?.removeEventListener("abort", onAbort);
         clearTimeout(timer);
         this.pending.delete(id);
-        finish(() => reject(new PigRuntimeError("pig-stdin-write-failed", `Failed to send PiG command: ${command}`, { cause: error })));
+        finish(() =>
+          reject(
+            new PigRuntimeError(
+              "pig-stdin-write-failed",
+              `Failed to send PiG command: ${command}`,
+              { cause: error },
+            ),
+          ),
+        );
       }
     });
   }
@@ -202,7 +213,9 @@ export class PigProcessHost implements PigRuntimeContract {
       });
     } catch (error) {
       this.state = "failed";
-      throw new PigRuntimeError("pig-spawn-failed", `Failed to spawn PiG: ${this.executable}`, { cause: error });
+      throw new PigRuntimeError("pig-spawn-failed", `Failed to spawn PiG: ${this.executable}`, {
+        cause: error,
+      });
     }
 
     this.process = child;
@@ -213,7 +226,12 @@ export class PigProcessHost implements PigRuntimeContract {
     });
     child.once("error", (error) => this.handleExit(error));
     child.once("close", (code, signal) => {
-      this.handleExit(new PigRuntimeError("pig-process-exited", `PiG exited code=${code ?? "null"} signal=${signal ?? "null"}`));
+      this.handleExit(
+        new PigRuntimeError(
+          "pig-process-exited",
+          `PiG exited code=${code ?? "null"} signal=${signal ?? "null"}`,
+        ),
+      );
     });
 
     this.state = "ready";
@@ -242,11 +260,15 @@ export class PigProcessHost implements PigRuntimeContract {
       clearTimeout(request.timer);
       this.pending.delete(id);
       if (message.success === false || message.error) {
+        const errorObject = typeof message.error === "string" ? undefined : message.error;
         request.reject(
           new PigRpcError({
-            code: message.error?.code,
-            message: message.error?.message ?? `PiG command failed: ${request.command}`,
-            details: message.error?.details,
+            code: errorObject?.code,
+            message:
+              typeof message.error === "string"
+                ? message.error
+                : (errorObject?.message ?? `PiG command failed: ${request.command}`),
+            details: errorObject?.details,
           }),
         );
       } else {
@@ -269,7 +291,10 @@ export class PigProcessHost implements PigRuntimeContract {
         ? reason
         : new PigRuntimeError("pig-process-exited", "PiG process exited unexpectedly"),
     );
-    this.emit({ type: "runtime_exited", error: reason instanceof Error ? reason.message : String(reason) });
+    this.emit({
+      type: "runtime_exited",
+      error: reason instanceof Error ? reason.message : String(reason),
+    });
   }
 
   private rejectPending(reason: unknown): void {
@@ -285,7 +310,10 @@ export class PigProcessHost implements PigRuntimeContract {
       try {
         listener(event);
       } catch (error) {
-        this.log("warn", `PiG listener failed: ${error instanceof Error ? error.message : String(error)}`);
+        this.log(
+          "warn",
+          `PiG listener failed: ${error instanceof Error ? error.message : String(error)}`,
+        );
       }
     }
   }
