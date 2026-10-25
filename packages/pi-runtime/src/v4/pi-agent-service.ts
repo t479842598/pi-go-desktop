@@ -169,8 +169,7 @@ export class PiAgentService {
     // the assembler rejects the second.
     for (const [existingId, existing] of this.subscriptions) {
       if (existing.sessionId !== handle.sessionId) continue;
-      existing.projection.stop();
-      this.subscriptions.delete(existingId);
+      this.removeSubscription(existingId);
     }
 
     const projection = new ConversationProjection(handle, {
@@ -304,10 +303,7 @@ export class PiAgentService {
   };
 
   async unsubscribeConversationV4(params: { subscriptionId: string }): Promise<void> {
-    const subscription = this.subscriptions.get(params.subscriptionId);
-    if (!subscription) return;
-    subscription.projection.stop();
-    this.subscriptions.delete(params.subscriptionId);
+    this.removeSubscription(params.subscriptionId);
   }
 
   // ── sessions index ───────────────────────────────────────────────────────
@@ -518,7 +514,11 @@ export class PiAgentService {
       case "forkFromEntry": {
         const entryId = typeof payload.entryId === "string" ? payload.entryId : "";
         if (!entryId) return this.reject(commandId, "missingEntryId");
+        const previousSessionId = handle.sessionId;
         const forked = await this.forkSession(handle, entryId);
+        // PiG replaces the active runtime during fork. Retire the old
+        // projection before the client binds the returned createSession ID.
+        this.retireSessionSubscriptions(previousSessionId);
         return {
           ...this.accept(commandId),
           result: {
@@ -647,8 +647,9 @@ export class PiAgentService {
   // ── lifecycle ────────────────────────────────────────────────────────────
 
   async dispose(): Promise<void> {
-    for (const subscription of this.subscriptions.values()) subscription.projection.stop();
-    this.subscriptions.clear();
+    for (const subscriptionId of this.subscriptions.keys()) {
+      this.removeSubscription(subscriptionId);
+    }
     this.host.closeAll();
     this.frameEmitter.dispose();
     this.ttftEmitter.dispose();
@@ -675,6 +676,22 @@ export class PiAgentService {
       if (subscription.sessionId === sessionId) return subscription;
     }
     return undefined;
+  }
+
+  private removeSubscription(subscriptionId: string): void {
+    const subscription = this.subscriptions.get(subscriptionId);
+    if (!subscription) return;
+    subscription.projection.stop();
+    this.subscriptions.delete(subscriptionId);
+    if (this.sessionProjections.get(subscription.sessionId) === subscription.projection) {
+      this.sessionProjections.delete(subscription.sessionId);
+    }
+  }
+
+  private retireSessionSubscriptions(sessionId: string): void {
+    for (const [subscriptionId, subscription] of this.subscriptions) {
+      if (subscription.sessionId === sessionId) this.removeSubscription(subscriptionId);
+    }
   }
 
   /**

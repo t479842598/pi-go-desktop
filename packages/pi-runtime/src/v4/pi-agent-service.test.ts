@@ -23,6 +23,7 @@ import {
 } from "@zcode/shared/zcode-protocol-v4";
 
 import { PiSessionHost } from "../session-host.js";
+import type { PiGSessionEvent, RuntimeSessionHandle, RuntimeSessionHost } from "../pig/session-host.js";
 import { PiAgentService } from "./pi-agent-service.js";
 
 async function withService<T>(
@@ -145,3 +146,128 @@ test("an unknown payload type is rejected with a reason code", async () => {
     assert.match(result.reasonCode ?? "", /^unsupported:/);
   });
 });
+
+test("fork retires the old projection and returns the replacement session id", async () => {
+  const host = new ForkHost();
+  const service = new PiAgentService({ host });
+  try {
+    const created = await service.sendConversationCommandV4({
+      envelope: { commandId: "create", type: "createSession", payload: { workspaceId: "/workspace" } },
+    });
+    const oldSessionId =
+      created.result?.type === "createSession" ? created.result.sessionId : undefined;
+    assert.equal(oldSessionId, "old-session");
+
+    const frames: unknown[] = [];
+    service.onDynamicConversationFrame({})((frame) => frames.push(frame));
+    const subscription = await service.subscribeConversationV4({ sessionId: oldSessionId! });
+    const beforeFork = frames.length;
+
+    const forked = await service.sendConversationCommandV4({
+      envelope: {
+        commandId: "fork",
+        sessionId: oldSessionId,
+        type: "forkFromEntry",
+        payload: { entryId: "entry-1" },
+      },
+    });
+    assert.equal(forked.status, "accepted");
+    assert.deepEqual(forked.result, {
+      type: "createSession",
+      sessionId: "new-session",
+      input: { delivery: "startNow", inputId: "new-session-fork" },
+    });
+    assert.equal(host.get("old-session"), undefined);
+    assert.equal(host.get("new-session")?.sessionId, "new-session");
+
+    host.old.emit({ type: "agent_start" });
+    assert.equal(frames.length, beforeFork);
+
+    await service.subscribeConversationV4({ sessionId: "new-session" });
+    const afterNewSubscription = frames.length;
+    host.next.emit({ type: "agent_start" });
+    assert.ok(frames.length > afterNewSubscription);
+
+    await service.unsubscribeConversationV4({ subscriptionId: subscription.ack.subscriptionId });
+  } finally {
+    await service.dispose();
+  }
+});
+
+class TestHandle implements RuntimeSessionHandle {
+  readonly cwd = "/workspace";
+  readonly session: RuntimeSessionHandle["session"];
+  private readonly listeners = new Set<(event: PiGSessionEvent) => void>();
+
+  constructor(readonly sessionId: string) {
+    this.session = {
+      sessionId,
+      state: {
+        model: { provider: "test", id: "test-model" },
+        thinkingLevel: "off",
+        messages: [],
+        isStreaming: false,
+      },
+      prompt: async () => {},
+      abort: async () => {},
+      dispose: () => {},
+    };
+  }
+
+  subscribe(listener: (event: PiGSessionEvent) => void): () => void {
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
+  }
+
+  dispose(): void {
+    this.listeners.clear();
+  }
+
+  emit(event: PiGSessionEvent): void {
+    for (const listener of [...this.listeners]) listener(event);
+  }
+}
+
+class ForkHost implements RuntimeSessionHost {
+  readonly old = new TestHandle("old-session");
+  readonly next = new TestHandle("new-session");
+  private readonly handles = new Map<string, RuntimeSessionHandle>([[this.old.sessionId, this.old]]);
+
+  async open(input: { cwd: string; sessionId?: string }): Promise<RuntimeSessionHandle> {
+    const sessionId = input.sessionId ?? this.old.sessionId;
+    const handle = this.handles.get(sessionId);
+    if (!handle) throw new Error(`unknown test session: ${sessionId}`);
+    return handle;
+  }
+
+  get(sessionId: string): RuntimeSessionHandle | undefined {
+    return this.handles.get(sessionId);
+  }
+
+  has(sessionId: string): boolean {
+    return this.handles.has(sessionId);
+  }
+
+  cwdOf(sessionId: string): string | undefined {
+    return this.handles.get(sessionId)?.cwd;
+  }
+
+  list(): string[] {
+    return [...this.handles.keys()];
+  }
+
+  async fork(handle: RuntimeSessionHandle): Promise<string> {
+    assert.equal(handle.sessionId, this.old.sessionId);
+    this.handles.delete(this.old.sessionId);
+    this.handles.set(this.next.sessionId, this.next);
+    return this.next.sessionId;
+  }
+
+  close(sessionId: string): void {
+    this.handles.delete(sessionId);
+  }
+
+  closeAll(): void {
+    this.handles.clear();
+  }
+}
