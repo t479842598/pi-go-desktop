@@ -1,5 +1,13 @@
 /* eslint-disable max-lines -- Electron Builder config keeps related packaging hooks together so build order stays explicit. */
-import { cpSync, existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import {
+  cpSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+} from "node:fs";
 import { readdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -11,6 +19,7 @@ import { noticesFileName, stageElectronNotices } from "../../scripts/third-party
 import { resolveNativeSearchReleasePlan } from "../../scripts/native-search-tools-config.mjs";
 import { getBuildMetadata } from "./scripts/build-metadata.mjs";
 import { collectRuntimeModuleClosureEntries } from "./scripts/runtime-dependency-closure.mjs";
+import { satisfiesVersionRange } from "./scripts/runtime-dependency-version-plan.mjs";
 import {
   resolvePackagedNodePtyPrebuildPath,
   restoreTargetNodePtyPrebuild,
@@ -318,6 +327,133 @@ function normalizeAsarEntry(entry) {
   return entry.trim().replaceAll("\\", "/");
 }
 
+/**
+ * 按 app.asar 的实际 node_modules 布局，为版本不兼容的依赖补写父包内嵌套副本。
+ *
+ * 只扫描 staging 中真实的包目录与依赖声明：顶层已有某包时旧逻辑会直接跳过，
+ * 于是 proper-lockfile 的 signal-exit@^3 被顶层 v4 顶替，运行时 require 得到
+ * 具名导出对象而非函数，抛 onExit is not a function，启动阶段落 sql_failed。
+ */
+function injectNestedRuntimeDependencyCopies(
+  stagingNodeModulesDir,
+  resolvedDependencies,
+  requiredModuleNames,
+) {
+  const topLevelVersions = new Map();
+  const nestedTargets = new Set();
+  const packageRoots = [];
+
+  const collectPackageRoots = (nodeModulesDir, depth = 0) => {
+    if (depth > 6 || !existsSync(nodeModulesDir)) return;
+    let entries;
+    try {
+      entries = readdirSync(nodeModulesDir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      if (!entry.isDirectory() || entry.name === ".bin") continue;
+      if (entry.name.startsWith("@")) {
+        const scopedDir = resolve(nodeModulesDir, entry.name);
+        let scopedEntries = [];
+        try {
+          scopedEntries = readdirSync(scopedDir, { withFileTypes: true });
+        } catch {
+          continue;
+        }
+        for (const scopedEntry of scopedEntries) {
+          if (scopedEntry.isDirectory()) packageRoots.push(resolve(scopedDir, scopedEntry.name));
+        }
+        continue;
+      }
+      packageRoots.push(resolve(nodeModulesDir, entry.name));
+      collectPackageRoots(resolve(nodeModulesDir, entry.name, "node_modules"), depth + 1);
+    }
+  };
+
+  collectPackageRoots(stagingNodeModulesDir);
+
+  const readManifest = (root) => {
+    try {
+      return JSON.parse(readFileSync(resolve(root, "package.json"), "utf8"));
+    } catch {
+      return null;
+    }
+  };
+
+  for (const packageRoot of packageRoots) {
+    const manifest = readManifest(packageRoot);
+    if (!manifest?.name || typeof manifest.version !== "string") continue;
+    if (packageRoot.split("node_modules").length === 2) {
+      topLevelVersions.set(manifest.name, manifest.version);
+    }
+  }
+  for (const packageRoot of packageRoots) nestedTargets.add(packageRoot);
+
+  // 闭包条目给出的是该依赖在真实运行时会解析到的版本（含 pnpm 嵌套副本），
+  // 用它覆盖 staging 扫描结果，避免被顶层同名包覆盖成不兼容版本。
+  const availableVersions = new Map();
+  for (const dependency of resolvedDependencies) {
+    if (!dependency.sourceModulePath) continue;
+    const manifest = readManifest(dependency.sourceModulePath);
+    if (manifest?.name && typeof manifest.version === "string") {
+      availableVersions.set(manifest.name, {
+        version: manifest.version,
+        sourceModulePath: dependency.sourceModulePath,
+      });
+    }
+  }
+  // 闭包未覆盖的包再退回 staging 内扫描，且优先保留非顶层副本。
+  for (const packageRoot of packageRoots) {
+    const manifest = readManifest(packageRoot);
+    if (!manifest?.name || typeof manifest.version !== "string") continue;
+    const isTopLevel = packageRoot.split("node_modules").length === 2;
+    if (isTopLevel && availableVersions.has(manifest.name)) continue;
+    if (!isTopLevel) {
+      availableVersions.set(manifest.name, {
+        version: manifest.version,
+        sourceModulePath: packageRoot,
+      });
+    } else if (!availableVersions.has(manifest.name)) {
+      availableVersions.set(manifest.name, {
+        version: manifest.version,
+        sourceModulePath: packageRoot,
+      });
+    }
+  }
+
+  // 只处理运行时必需闭包内的父包：UI/构建期依赖拓扑里存在大量 electron-builder
+  // 正常裁剪的版本差异，全量注入会无谓膨胀安装包，也会改变与运行无关的解析结果。
+  const requiredSet = new Set(requiredModuleNames);
+  let injected = 0;
+  for (const packageRoot of packageRoots) {
+    const manifest = readManifest(packageRoot);
+    if (!manifest?.name || !requiredSet.has(manifest.name) || !manifest.dependencies) continue;
+
+    for (const [dependencyName, range] of Object.entries(manifest.dependencies)) {
+      const topLevelVersion = topLevelVersions.get(dependencyName);
+      if (!topLevelVersion) continue;
+      if (satisfiesVersionRange(topLevelVersion, range) !== false) continue;
+
+      const available = availableVersions.get(dependencyName);
+      if (!available || satisfiesVersionRange(available.version, range) !== true) continue;
+
+      const targetPath = resolve(packageRoot, "node_modules", dependencyName);
+      if (nestedTargets.has(targetPath)) continue;
+
+      mkdirSync(dirname(targetPath), { recursive: true });
+      rmSync(targetPath, { force: true, recursive: true });
+      cpSync(available.sourceModulePath, targetPath, { recursive: true });
+      nestedTargets.add(targetPath);
+      injected += 1;
+      console.log(
+        `[afterPack] nested runtime dependency ${dependencyName}@${available.version} -> ${targetPath} (top-level ${topLevelVersion} vs ${range})`,
+      );
+    }
+  }
+  return injected;
+}
+
 function resolveMissingRuntimeModules(appAsarPath) {
   const asarEntries = runAsarCommandAndReadStdout(["list", appAsarPath])
     .split("\n")
@@ -410,6 +546,22 @@ async function injectHoistedRuntimeModulesIntoAsar(context) {
         mkdirSync(dirname(targetModulePath), { recursive: true });
         rmSync(targetModulePath, { force: true, recursive: true });
         cpSync(sourceModulePath, targetModulePath, { recursive: true });
+      }
+
+      // 顶层已有同名包但版本不满足父包时（如 proper-lockfile 需要 signal-exit@^3，
+      // 而顶层是 v4），必须把真实版本复制到父包自身的 node_modules，否则运行时会
+      // 解析到不兼容的顶层版本并抛 onExit is not a function，导致 sql_failed。
+      const runtimeClosure = collectRuntimeModuleClosureEntries(
+        REQUIRED_ASAR_RUNTIME_MODULES,
+        runtimeModuleLookupRoots,
+      );
+      const nestedCopyCount = injectNestedRuntimeDependencyCopies(
+        stagingNodeModulesDir,
+        runtimeClosure,
+        runtimeClosure.map((entry) => entry.moduleName),
+      );
+      if (nestedCopyCount > 0) {
+        console.log(`[afterPack] injected ${nestedCopyCount} nested runtime dependenc(ies)`);
       }
     });
 

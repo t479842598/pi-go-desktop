@@ -3,14 +3,14 @@
   "private": true,
   "type": "module",
   "imports": {
-    "#src/*": "./src/*"
+    "#src/*": "./dist/*"
   },
   "exports": {
-    "./storage-startup": "./src/project-storage/startup-entry.ts",
-    ".": "./src/index.ts",
-    "./cua-permission-broker": "./src/cua-permission-broker/index.ts",
-    "./process/processTreeTerminator": "./src/process/processTreeTerminator.ts",
-    "./node": "./src/node.ts"
+    "./storage-startup": "./dist/project-storage/startup-entry.js",
+    ".": "./dist/index.js",
+    "./cua-permission-broker": "./dist/cua-permission-broker/index.js",
+    "./process/processTreeTerminator": "./dist/process/processTreeTerminator.js",
+    "./node": "./dist/node.js"
   },
   "scripts": {
     "lint": "oxlint",

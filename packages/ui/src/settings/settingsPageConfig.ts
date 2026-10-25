@@ -167,6 +167,13 @@ const BASE_SETTINGS_SECTIONS: SettingsSectionDefinition[] = [
     titleId: "settings.backup.title",
     groupId: "dataAndStats",
   },
+  // pi-zcode：pi 会话整库导出/导入（仅 PI 产品可见，settingsNavigation 控制隐藏）。
+  {
+    id: "sessionData",
+    icon: HardDriveUpload,
+    titleId: "pi.sessionData.title",
+    groupId: "dataAndStats",
+  },
   {
     id: "usage",
     icon: BarChart3,

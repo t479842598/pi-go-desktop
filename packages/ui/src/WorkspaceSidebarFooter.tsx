@@ -1,4 +1,5 @@
 import { SidebarNativeTooltip, ControlHintTooltip } from "@/ControlHintTooltip.js";
+import { PI_THEMES } from "@/lib/piThemes.js";
 /* oxlint-disable eslint(max-lines) -- footer 聚合账户、主题、模式和快捷键菜单。 */
 import type { Locale, UserInfo } from "@zcode/shared";
 import { memo, useCallback, useEffect, useState, type ReactNode } from "react";
@@ -72,7 +73,7 @@ function getSidebarProfileName(user?: UserInfo | null): string {
     return username;
   }
 
-  return "ZCode";
+  return "PI";
 }
 
 function getSidebarProfileBadge(
@@ -139,6 +140,8 @@ export const WorkspaceSidebarFooter = memo(function WorkspaceSidebarFooterCompon
   const openRewards = useOpenRewards();
   const interfaceMode = useZCodeStore((state) => state.interfaceMode);
   const setInterfaceMode = useZCodeStore((state) => state.setInterfaceMode);
+  const piTheme = useZCodeStore((state) => state.piTheme);
+  const setPiTheme = useZCodeStore((state) => state.setPiTheme);
   const zoomInShortcutLabel = useShortcutCommandLabel("zoomIn");
   const zoomOutShortcutLabel = useShortcutCommandLabel("zoomOut");
   const resetZoomShortcutLabel = useShortcutCommandLabel("resetZoom");
@@ -373,6 +376,25 @@ export const WorkspaceSidebarFooter = memo(function WorkspaceSidebarFooterCompon
                       id: "sidebar.settings.theme.zai-light",
                     })}
                   </DropdownMenuRadioItem>
+                </DropdownMenuRadioGroup>
+              </DropdownMenuSubContent>
+            </DropdownMenuSub>
+            {/* pi-web 的 23 套主题：叠加在上方明暗主题之上的覆盖层。 */}
+            <DropdownMenuSub>
+              <DropdownMenuSubTrigger>
+                <Palette className="size-4" />
+                {intl.formatMessage({ id: "sidebar.settings.piTheme" })}
+              </DropdownMenuSubTrigger>
+              <DropdownMenuSubContent className="w-48 max-h-72 overflow-y-auto">
+                <DropdownMenuRadioGroup value={piTheme} onValueChange={setPiTheme}>
+                  <DropdownMenuRadioItem value="">
+                    {intl.formatMessage({ id: "sidebar.settings.piTheme.none" })}
+                  </DropdownMenuRadioItem>
+                  {PI_THEMES.map((piThemeOption) => (
+                    <DropdownMenuRadioItem key={piThemeOption.id} value={piThemeOption.id}>
+                      {piThemeOption.label}
+                    </DropdownMenuRadioItem>
+                  ))}
                 </DropdownMenuRadioGroup>
               </DropdownMenuSubContent>
             </DropdownMenuSub>

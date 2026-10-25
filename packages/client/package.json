@@ -3,8 +3,8 @@
   "private": true,
   "type": "module",
   "exports": {
-    ".": "./src/index.ts",
-    "./globals": "./src/globals.d.ts"
+    ".": "./dist/index.js",
+    "./globals": "./dist/globals.d.js"
   },
   "scripts": {
     "lint": "oxlint",

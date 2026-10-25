@@ -22,7 +22,8 @@ export type SettingsSectionId =
   | "workspaceFileSearch"
   | "computerUse"
   | "automations"
-  | "shortcuts";
+  | "shortcuts"
+  | "sessionData";
 
 export type SettingsUsageTabTarget = "app" | "codingPlan";
 export type SettingsPluginTabTarget = "plugins" | "mcps" | "skills" | "commands";
@@ -38,6 +39,20 @@ const SETTINGS_SOURCE_SERVER_DETAILS_INTENT_KEY = "zcode-settings-source-server-
 const SETTINGS_MODEL_PROVIDER_ID_INTENT_KEY = "zcode-settings-model-provider-id-intent";
 const SETTINGS_SECTION_INTENT_EVENT = "zcode:settings-section-intent",
   SETTINGS_LAST_SECTION_STORAGE_KEY = "zcode-settings-last-section";
+// pi-zcode: 产品身份由构建期 define 注入（vite/tsup 同源 resolveDesktopProductIdentity）。
+// PI 没有账号体系与 ZCode 的任务/MCP/CUA/用量后端，对应分区只会渲染空壳或报
+// notImplemented，按产品裁掉。typeof 守卫保证未注入该 define 的构建（web-share 等）
+// 行为不变。
+declare const __ZCODE_PRODUCT_NAME__: string | undefined;
+
+/** pi-zcode: 当前产品是否为 PI（设置页据此裁剪 ZCode 专有分区）。 */
+export function isPiProduct(): boolean {
+  return (
+    typeof __ZCODE_PRODUCT_NAME__ === "string" &&
+    (__ZCODE_PRODUCT_NAME__ === "PI" || __ZCODE_PRODUCT_NAME__ === "PI Preview")
+  );
+}
+
 const HIDDEN_SETTINGS_SECTIONS = new Set<SettingsSectionId>([
   // 产品语义：定时任务是 workspace 主视图，不能再作为设置页分区出现。
   // 注意：hooks 已是正式设置页分区，不在此列。
@@ -47,6 +62,24 @@ const HIDDEN_SETTINGS_SECTIONS = new Set<SettingsSectionId>([
   // 工作区搜索（.zcodeignore）设置入口先隐藏：规则文件仍生效并可手动编辑，
   // 编辑页代码保留，放开时从这里移除即可。
   "workspaceFileSearch",
+  // pi-zcode: ZCode 专有面。技能已接 pi（skillsService），其余分区 pi 无对应后端。
+  ...(isPiProduct()
+    ? ([
+        "memory",
+        "subagents",
+        "plugin",
+        "mcp",
+        "commands",
+        "hooks",
+        "remoteDevices",
+        "computerUse",
+        "backup",
+        "usage",
+        "archives",
+      ] as SettingsSectionId[])
+    : []),
+  // 「会话数据」（pi 会话导出/导入）只在 PI 产品出现。
+  ...(!isPiProduct() ? (["sessionData"] as SettingsSectionId[]) : []),
 ]);
 
 export interface SettingsSectionIntentEventDetail {

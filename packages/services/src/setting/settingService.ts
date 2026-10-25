@@ -14,7 +14,7 @@ import {
 } from "@zcode/shared";
 import type { ISettingService, WorkspaceSettingsProjection } from "./setting.js";
 import { normalizeSettingsPatch } from "#src/setting/normalizeSettingsPatch.js";
-import { copyDataDirectory, getDataBaseDir, validateDataBaseDirTarget } from "../paths.js";
+import { copyDataDirectory, getAppConfigDir, getDataBaseDir, validateDataBaseDirTarget } from "../paths.js";
 import { isEffectiveDevelopmentNodeEnv } from "../runtime-tools/nodeEnv.js";
 import { maybeThrowInjectedFsFault } from "../fs/fsFaultInjection.js";
 import { atomicWriteText, withAtomicFileLock } from "../fs/atomicFileUtils.js";
@@ -225,7 +225,10 @@ export function createSettingServiceWithMigrations(): {
 } {
   // 原因：每次 IO 动态读 HOME 会让旧异步投影写进后来实例的目录。
   // 在实例创建时取值，既支持测试/Host 注入，也让读取、文件锁与替换始终同源。
-  const settingsFile = join(resolveUserHomeDir(), ".zcode", "v2", "setting.json");
+  // pi-zcode: 走 getAppConfigDir()（数据根感知）而不是硬编码 ~/.zcode/v2 ——
+  // PI 引擎运行时数据根是 ~/.pi-web，硬编码会让 PI 与 ZCode 共写同一份
+  // setting.json，互相覆盖 recentProjects / 窗口尺寸 / 语言。
+  const settingsFile = join(getAppConfigDir(), "setting.json");
   const getSettingsFile = () => settingsFile;
   const getSettingsDir = () => dirname(settingsFile);
   const readSettingsWithMeta = () => readSettingsWithMetaAt(settingsFile);

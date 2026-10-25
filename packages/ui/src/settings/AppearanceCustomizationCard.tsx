@@ -30,6 +30,7 @@ import type {
   WallpaperFit,
 } from "@/lib/appearanceCustomization.js";
 import { SettingsRangeControl, SettingsRow } from "@/settings/SettingsPageParts.js";
+import { PiThemePicker } from "@/settings/PiThemePicker.js";
 
 /**
  * 配色方案对应的取色器回显色。
@@ -116,6 +117,18 @@ export function AppearanceCustomizationCard() {
 
   return (
     <div className="min-w-0 space-y-3">
+      {/* pi-zcode：PI 主题网格（带预览），置于自定义外观之前。 */}
+      <div>
+        <h3 className="text-ui-lg font-semibold text-foreground">
+          {intl.formatMessage({ id: "sidebar.settings.piTheme" })}
+        </h3>
+        <p className="mt-1 text-ui-base leading-6 text-foreground-subtle">
+          {intl.formatMessage({ id: "pi.theme.gridDescription" })}
+        </p>
+        <div className="mt-3">
+          <PiThemePicker />
+        </div>
+      </div>
       <div>
         <h3 className="text-ui-lg font-semibold text-foreground">
           {intl.formatMessage({ id: "settings.appearance.customTitle" })}

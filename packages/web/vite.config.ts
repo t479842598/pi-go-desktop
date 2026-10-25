@@ -100,6 +100,13 @@ export default defineConfig(({ mode }) => {
       __ZCODE_MIN_COMPATIBLE_VERSION__: JSON.stringify(minCompatibleVersion),
       __ZCODE_COMMIT__: JSON.stringify(env.ZCODE_COMMIT || "unknown"),
       __ZCODE_ENV__: JSON.stringify(zcodeEnv),
+      // pi-zcode：远程站与桌面同一产品身份（PI），用于裁剪 ZCode 专有设置分区等。
+      __ZCODE_PRODUCT_NAME__: JSON.stringify(
+        process.env.PI_PRODUCT_NAME?.trim() || "PI",
+      ),
+      // pi-zcode：V1 配对链接（sid/hash/t）直通的编译期开关，shared 的
+      // parseWebRemoteControlExternalQrParams 按它放行 hash 链接。
+      __PI_PRODUCT__: JSON.stringify((process.env.PI_PRODUCT_NAME?.trim() || "PI").startsWith("PI")),
       "import.meta.env.VITE_ZCODE_BASE_URL": JSON.stringify(zcodeEndpointOrigin),
       // 兼容旧 Web runtime 读取名；新代码统一读 VITE_ZCODE_BASE_URL。
       "import.meta.env.VITE_ZCODE_ENDPOINT_ORIGIN": JSON.stringify(zcodeEndpointOrigin),

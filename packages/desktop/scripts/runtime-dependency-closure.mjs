@@ -72,6 +72,8 @@ export function collectRuntimeModuleClosureEntries(moduleNames, moduleLookupRoot
     visited.add(moduleName);
     collected.push({
       moduleName,
+      // 记录该依赖是从哪个父包解析出来的，afterPack 据此判断是否需要嵌套副本。
+      consumerPackagePath: parentPackagePath,
       sourceModulePath: runtimePackage?.packageRoot ?? null,
       packageJsonPath: runtimePackage?.packageJsonPath ?? null,
     });

@@ -24,6 +24,7 @@ import {
 } from "@/store/codingPlanQuotaResetState.js";
 import { DEFAULT_CODE_PREVIEW_SETTINGS } from "@/lib/codePreviewSettings.js";
 import { readSafeLocalStorage, writeSafeLocalStorage } from "@/lib/browserEnvironment.js";
+import { applyPiTheme, readStoredPiTheme } from "@/lib/piThemes.js";
 import {
   applyUiFontSizePx,
   loadUiFontSizePx,
@@ -131,6 +132,10 @@ export interface ZCodeState {
   /** 当前主题 */
   theme: Theme;
   setTheme: (theme: Theme) => void;
+
+  /** pi-web 主题覆盖层（html[data-pi-theme]），空串 = 不覆盖 */
+  piTheme: string;
+  setPiTheme: (id: string) => void;
 
   /** 当前语言 */
   locale: string;
@@ -303,6 +308,18 @@ export function createZCodeStore(
       applyTheme(normalizedTheme);
 
       set({ theme: normalizedTheme });
+    },
+
+    // pi-web 的 23 套主题覆盖层（html[data-pi-theme]），叠加在基础明暗之上。
+    // 初始化即应用，刷新后主题不丢。
+    piTheme: (() => {
+      const id = readStoredPiTheme();
+      applyPiTheme(id);
+      return id;
+    })(),
+    setPiTheme: (id: string) => {
+      applyPiTheme(id);
+      set({ piTheme: id });
     },
 
     locale: readSafeLocalStorage("zcode-locale") || "zh-CN",

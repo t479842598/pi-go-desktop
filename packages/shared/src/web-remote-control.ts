@@ -188,10 +188,17 @@ export function buildWebRemoteControlExternalQrUrl({
   return url.toString();
 }
 
+declare const __PI_PRODUCT__: boolean | undefined;
+
 export function parseWebRemoteControlExternalQrParams(
   params: URLSearchParams,
 ): WebRemoteControlV2QrParams | null {
-  if (params.has("hash") || params.has("t")) return null;
+  // pi-zcode: PI 无账号体系，桌面的 relay 桥发的是 V1 配对链接（sid + hash + t）。
+  // V2 解析器原本见 hash/t 即判 null（防旧凭据混入 V2 token 流），PI 下必须接受：
+  // 配对凭据本身就是认证。typeof 守卫让未注入该 define 的构建行为不变。
+  const piProduct =
+    typeof __PI_PRODUCT__ !== "undefined" ? (__PI_PRODUCT__ as boolean | undefined) : undefined;
+  if (piProduct !== true && (params.has("hash") || params.has("t"))) return null;
   const result: WebRemoteControlV2QrParams = {};
   for (const [key, param] of [
     ["deviceSid", "sid"],

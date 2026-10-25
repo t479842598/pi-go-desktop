@@ -29,3 +29,13 @@ Create the canonical session model, source registry contract, manifest, digest, 
 - Canonical session and manifest types compile
 - Writer rejects traversal and preserves existing targets
 - Repeated import is idempotent and writes atomically
+
+### T-002 Implement six source adapters <!-- lrnev-task: status=in_progress, created=2026-10-25T03:04:02.405Z, updated=2026-10-25T03:39:45.218Z, validates=F-02|F-04|F-05|D-02|D-04 -->
+<!-- lrnev-task-history: [{"from":"pending","to":"in_progress","at":"2026-10-25T03:39:45.218Z","reason":"开始实现统一 source adapter registry/service 与六类会话导入闭环。"}] -->
+
+Implement registry, service, and six source adapters that normalize Pi/Pi Web, Reasonix, Codex, ZCode, DeepSeekharness, and Claude Code into canonical PiG session v3.
+
+**验收**：
+- All six source kinds are registered
+- Unknown and damaged records produce auditable results
+- Each adapter has fixture coverage

@@ -61,8 +61,8 @@ Replace production AgentSession creation with PiG backend wiring while preservin
 - 非 ENOENT 文件系统错误仍抛出
 - 现有 sourcemap 清理回归通过
 
-### T-005 Bundle pinned PiG runtime in Desktop app <!-- lrnev-task: status=in_progress, created=2026-10-25T12:09:21.450Z, updated=2026-10-25T12:09:39.379Z, validates=F-01|F-04|F-05 -->
-<!-- lrnev-task-history: [{"from":"pending","to":"in_progress","at":"2026-10-25T12:09:39.379Z","reason":"开始接入固定 PiG 二进制的 Desktop 随包资源与 packaged host 路径解析。"}] -->
+### T-005 Bundle pinned PiG runtime in Desktop app <!-- lrnev-task: status=completed, created=2026-10-25T12:09:21.450Z, updated=2026-10-25T14:22:12.731Z, validates=F-01|F-04|F-05 -->
+<!-- lrnev-task-history: [{"from":"pending","to":"in_progress","at":"2026-10-25T12:09:39.379Z","reason":"开始接入固定 PiG 二进制的 Desktop 随包资源与 packaged host 路径解析。"},{"from":"in_progress","to":"completed","at":"2026-10-25T14:22:12.731Z","reason":"PiG 固定版本 staging、resources/tools/pig、packaged PIG_EXECUTABLE 注入、产物机械校验与 CI Go 1.27.3 已落地；Host 38/38、PiG 11/11、格式/lint/tsc/空白全通过；提交 7301c9ff。"}] -->
 
 将固定 PiG runtime 随 Desktop 资源打包，并让 packaged host 解析到该资源路径；开发态允许显式覆盖，production 不依赖系统 PATH，也不回退到旧 TypeScript Pi runtime。
 

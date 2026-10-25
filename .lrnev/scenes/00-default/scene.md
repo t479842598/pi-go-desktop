@@ -1,0 +1,47 @@
+---
+id: '00-default'
+number: 0
+name: 'default'
+created: '2026-10-24'
+intent: 'Default landing scene for specs without an explicit scene.'
+---
+
+# Default
+
+## L0 摘要
+
+（一句话描述这个 Scene 是干什么的，约 100 token；写完本文件后调 `summarize_save`（context://scene/{id}），lrnev 按文档键控写入 `.scene.abstract.md`，不要手写旧式 `.abstract.md`）
+
+## L1 概览
+
+（约 2000 token 的概览，包含背景 / 边界 / 关键概念；经 `summarize_save` 写入 `.scene.overview.md`）
+
+## L2 详情
+
+### 业务背景
+
+（为什么需要这个 Scene？它解决什么问题？）
+
+### 边界与范围
+
+**包含**：
+- <!-- FILL: 包含的范围 -->
+
+**不包含**：
+- <!-- FILL: 不包含的范围 -->
+
+### 关键术语
+
+| 术语 | 定义 |
+|------|------|
+| <!-- FILL: 术语 --> | <!-- FILL: 定义 --> |
+
+### 相关 Scene
+
+- <!-- FILL: 相关 Scene 或无 -->
+
+## 维护说明
+
+- 本文档由用户主导编写，AI 协助填空。
+- **更新时机**：Scene 边界、intent 或关键术语变化时更新本文档（如 spec 归属新域、Scene 合并/拆分——由用户或主导者确认后改）；修改后重新调 `summarize_save` 同步 `.scene.abstract.md` / `.scene.overview.md`，**不要手写 sidecar、不要生成旧式 `.abstract.md`**。
+- 架构与路线的维护时机见同目录 architecture.md / roadmap.md 各自维护说明。

@@ -55,10 +55,13 @@ async function main() {
     for (const variant of ["light", "dark"]) {
       const colors = theme[variant];
       if (!colors) continue;
+      // 双选择器：html 根（整页换肤）+ 任意容器（设置→外观的预览卡片）。
+      const darkSel = `[data-pi-theme="${name}"].dark, html.dark[data-pi-theme="${name}"], [data-pi-theme="${name}"][data-pi-theme-mode="dark"]`;
+      const lightSel = `[data-pi-theme="${name}"]:not(.dark), html:not(.dark)[data-pi-theme="${name}"], [data-pi-theme="${name}"]:not([data-pi-theme-mode])`;
       const selector =
         variant === "dark"
-          ? `html.dark[data-pi-theme="${name}"]`
-          : `html:not(.dark)[data-pi-theme="${name}"]`;
+          ? darkSel
+          : lightSel;
 
       const lines = [];
       for (const [key, token] of Object.entries(MAP)) {

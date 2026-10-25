@@ -81,11 +81,15 @@ export class WebRemoteControlEntry {
       this.options.onView({ kind: "callback" });
       return;
     }
-    if (!this.options.auth.getZCodeJwtToken()) {
+    const params = parseWebRemoteControlExternalQrParams(url.searchParams);
+    // pi-zcode: PI 无账号体系。URL 带 sid&hash 配对参数时，配对凭据本身就是
+    // 认证——跳过 ZCode JWT 检查直接进入设备配对；只有裸访问（无参数）才落
+    // 登录视图。
+    const piPairing = params?.deviceSid && params?.deviceSid.length > 0;
+    if (!piPairing && !this.options.auth.getZCodeJwtToken()) {
       this.options.onView({ kind: "login" });
       return;
     }
-    const params = parseWebRemoteControlExternalQrParams(url.searchParams);
     if (!params) {
       this.options.onView({ kind: "failure", failure: { reason: "invalid-mobile-connection" } });
       return;
@@ -132,8 +136,16 @@ export class WebRemoteControlEntry {
     if (!list) return;
     if (list.request) return list.request;
     const jwt = this.options.auth.getZCodeJwtToken();
-    if (!jwt) return this.switchAccount();
-    if (list.acceptedJwt && list.acceptedJwt !== jwt) return this.start();
+    // pi-zcode: PI 无账号体系。设备列表直连中继（devices() 接受空 token——
+    // relay 的 V1 侧本就不校验 JWT），无登录态不再弹回登录页。
+    if (!jwt && !this.options.storage.getItem("pi-pairing-bypass")) {
+      try {
+        this.options.storage.setItem("pi-pairing-bypass", "1");
+      } catch {
+        /* 私密模式下静默继续 */
+      }
+    }
+    if (list.acceptedJwt && jwt && list.acceptedJwt !== jwt) return this.start();
     const { signal } = this.scope;
     list.view = { ...list.view, loading: true, error: false };
     this.options.onView(list.view);
@@ -224,6 +236,12 @@ export class WebRemoteControlEntry {
       params,
       signal,
       getToken: (tokenSignal) => {
+        // pi-zcode: PI 无 JWT。V1 配对链接的 hash 直接作为 relay 凭据透传，
+        // device 客户端会把它原样放进认证帧（与桌面桥同语义）。
+        const piHash = new URLSearchParams(this.options.getHref().split("?")[1] ?? "").get("hash");
+        if (!this.options.auth.getZCodeJwtToken() && piHash) {
+          return Promise.resolve(piHash);
+        }
         const jwt = this.options.auth.getZCodeJwtToken();
         if (!jwt) return Promise.reject(new WebRemoteControlV2ConnectionError("auth-required"));
         return this.options.token(jwt, tokenSignal);
