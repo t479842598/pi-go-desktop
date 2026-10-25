@@ -88,6 +88,12 @@ const commandStdoutMaxBuffer = 64 * 1024 * 1024;
 const requiredRuntimeModules = [
   "module-details-from-path",
   "pngjs",
+  // pi-zcode: PI 引擎包（tsc 构建、workspace 依赖外部导入）的完整闭包必须进 app.asar，
+  // 否则安装包里 host 动态 import("@pi/runtime") 即 ERR_MODULE_NOT_FOUND，数据源静默回退 ZCode。
+  // 与 electron-builder.config.js 的 REQUIRED_ASAR_RUNTIME_MODULES 同口径。
+  "@pi/runtime",
+  "@earendil-works/pi-coding-agent",
+  "@zcode/shared",
   // Bugfix: telemetry 的 OTLP exporter 在启动阶段依赖 sdk-metrics；开发态 hoist 会掩盖
   // electron-builder 漏包。最终产物必须机械校验该闭包，禁止可生成但无法启动的安装包流出。
   "@opentelemetry/sdk-metrics",
@@ -643,11 +649,43 @@ function resolveAppAsarPath(os, arch) {
   throw new Error(`不支持的目标操作系统: ${os}`);
 }
 
+function resolvePackagedResourcesPath(os, arch) {
+  if (os === "mac") {
+    return resolve(
+      desktopRoot,
+      desktopDistDir,
+      arch === "arm64" ? "mac-arm64" : "mac",
+      `${desktopProductIdentity.productName}.app`,
+      "Contents",
+      "Resources",
+    );
+  }
+  return resolve(
+    desktopRoot,
+    desktopDistDir,
+    arch === "arm64"
+      ? `${os === "win" ? "win" : "linux"}-arm64-unpacked`
+      : `${os === "win" ? "win" : "linux"}-unpacked`,
+    "resources",
+  );
+}
+
+function verifyPackagedPigRuntime(os, arch) {
+  const resourcesPath = resolvePackagedResourcesPath(os, arch);
+  const binaryName = os === "win" ? "pig.exe" : "pig";
+  const executablePath = resolve(resourcesPath, "tools", "pig", binaryName);
+  if (!existsSync(executablePath)) {
+    throw new Error(`打包产物缺少 PiG runtime: ${executablePath}`);
+  }
+}
+
 function verifyPackagedRuntimeDependencies(os, arch) {
   const appAsarPath = resolveAppAsarPath(os, arch);
   if (!existsSync(appAsarPath)) {
     throw new Error(`打包产物缺少 app.asar: ${appAsarPath}`);
   }
+
+  verifyPackagedPigRuntime(os, arch);
 
   // pnpm hoisted 依赖布局下，electron-builder 可能把运行时代码本体装进 app.asar，
   // 却漏掉它真正解析时仍要去根 node_modules 找的子依赖。

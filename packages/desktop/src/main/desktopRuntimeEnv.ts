@@ -41,6 +41,7 @@ import {
 import { getElectronAppPath, isElectronAppPackaged } from "./desktopElectronApp.js";
 
 declare const __ZCODE_PACKAGED_AGENT_TELEMETRY_ENV__: Readonly<Record<string, string>> | undefined;
+declare const __ZCODE_PRODUCT_NAME__: string | undefined;
 
 const isLocalDevelopmentRuntime = !isElectronAppPackaged();
 export const desktopRuntimeEnv: ZCodeRuntimeEnv = isLocalDevelopmentRuntime
@@ -63,9 +64,20 @@ function isTruthyRuntimeEnvOverride(name: string): boolean {
 // e2e 运行的是生产构建，默认会和本机正式版 ZCode 共用 app name / userData，
 // 触发 Electron 单实例锁后只激活已有窗口，Chromedriver 无法接管测试进程。
 // 这里允许测试显式隔离运行时身份，正常桌面/远控路径保持原来的默认值。
+//
+// pi-zcode: 打包态的名字必须来自 electron-builder 同一套产品身份（__ZCODE_PRODUCT_NAME__，
+// 由 tsup 从 resolveDesktopProductIdentity 注入），不能再硬编码 "ZCode"——那会把打包后的
+// PI 的 userData 解析到 ~/Library/Application Support/ZCode，与用户正在运行的 ZCode
+// 抢单实例锁，启动即静默退出。typeof 守卫让未注入该 define 的旧 bundle 安全回退。
+const packagedProductName =
+  typeof __ZCODE_PRODUCT_NAME__ === "string" && __ZCODE_PRODUCT_NAME__.trim()
+    ? __ZCODE_PRODUCT_NAME__.trim()
+    : undefined;
 export const runtimeApplicationName =
   readRuntimeEnvOverride("ZCODE_DESKTOP_APPLICATION_NAME") ??
-  (isLocalDevelopmentRuntime ? "ZCode Dev" : isPreviewPackagedRuntime ? "ZCode Preview" : "ZCode");
+  (isLocalDevelopmentRuntime
+    ? "ZCode Dev"
+    : (packagedProductName ?? (isPreviewPackagedRuntime ? "ZCode Preview" : "ZCode")));
 // Electron 的 app.getPath("home") 不一定跟随测试进程里的 HOME 覆盖。
 // e2e 默认工作区依赖 home 路径，因此提供显式覆盖，避免测试写到开发者真实 ~/ZCodeProject。
 export const runtimeHomePath = readRuntimeEnvOverride("ZCODE_DESKTOP_HOME_DIR");
@@ -403,17 +415,22 @@ function resolveBundledRuntimeToolBinaryPath(
   binaryName: string,
 ): string | undefined {
   const candidateBinaryName = process.platform === "win32" ? `${binaryName}.exe` : binaryName;
+  const platformKey = resolvePlatformKeyForPackagedApp();
   const candidates = [
     isElectronAppPackaged()
       ? join(process.resourcesPath, "tools", toolDir, candidateBinaryName)
       : null,
+    join(process.cwd(), "bundled-tools", platformKey, toolDir, candidateBinaryName),
     join(
-      import.meta.dirname,
-      "../../bundled-tools",
-      resolvePlatformKeyForPackagedApp(),
+      process.cwd(),
+      "packages",
+      "desktop",
+      "bundled-tools",
+      platformKey,
       toolDir,
       candidateBinaryName,
     ),
+    join(import.meta.dirname, "../../bundled-tools", platformKey, toolDir, candidateBinaryName),
   ].filter((candidate): candidate is string => Boolean(candidate));
 
   return candidates.find((candidate) => existsSync(candidate));
@@ -421,6 +438,16 @@ function resolveBundledRuntimeToolBinaryPath(
 
 function resolveBundledLarkCliBinaryPath(): string | undefined {
   return resolveBundledRuntimeToolBinaryPath("lark-cli", "lark-cli");
+}
+
+export function resolveBundledPigExecutablePath(): string | undefined {
+  const binaryName = process.platform === "win32" ? "pig.exe" : "pig";
+  if (isElectronAppPackaged()) {
+    // Packaged PI must never fall back to a shell PATH entry. Returning the expected
+    // path even when missing makes the later spawn fail with a stable executable path.
+    return join(process.resourcesPath, "tools", "pig", binaryName);
+  }
+  return resolveBundledRuntimeToolBinaryPath("pig", "pig");
 }
 
 export function resolveBundledGlmBinaryPath(): string | undefined {
@@ -494,11 +521,17 @@ export function resolveDynamicWorkflowModeHostEnv(options: {
 
 export function buildHostProcessEnv(hostProcessLocalEnv: Record<string, string>) {
   const glmBinaryPath = resolveBundledGlmBinaryPath();
+  const pigExecutablePath = resolveBundledPigExecutablePath();
   const larkCliBinaryPath = resolveBundledLarkCliBinaryPath();
   const resolvedGlmBinaryPath = resolveHostProcessBinaryEnv(
     "GLM_BINARY_PATH",
     hostProcessLocalEnv,
     glmBinaryPath,
+  );
+  const resolvedPigExecutablePath = resolveHostProcessBinaryEnv(
+    "PIG_EXECUTABLE",
+    hostProcessLocalEnv,
+    pigExecutablePath,
   );
   const resolvedLarkCliBinaryPath = resolveHostProcessBinaryEnv(
     "ZCODE_LARK_CLI_BINARY",
@@ -591,6 +624,7 @@ export function buildHostProcessEnv(hostProcessLocalEnv: Record<string, string>)
       ? { [ZCODE_CUA_BUNDLED_HELPER_APP_PATH_ENV]: bundledCuaHelperAppPath }
       : {}),
     ...(resolvedGlmBinaryPath ? { GLM_BINARY_PATH: resolvedGlmBinaryPath } : {}),
+    ...(resolvedPigExecutablePath ? { PIG_EXECUTABLE: resolvedPigExecutablePath } : {}),
     ...(resolvedLarkCliBinaryPath ? { ZCODE_LARK_CLI_BINARY: resolvedLarkCliBinaryPath } : {}),
   };
 }

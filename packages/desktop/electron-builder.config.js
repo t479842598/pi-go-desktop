@@ -22,7 +22,10 @@ import {
   resolveDesktopProductIdentity,
 } from "./scripts/desktop-product-identity.mjs";
 import { createWindowsPowerShellSecurityArgs } from "./scripts/powershell-command.mjs";
-import { isSharpRequiredByComputerUse, verifyStagedSharp } from "./scripts/sharp-package-assets.mjs";
+import {
+  isSharpRequiredByComputerUse,
+  verifyStagedSharp,
+} from "./scripts/sharp-package-assets.mjs";
 import { isRealComputerUseProducerInstalled } from "./scripts/computer-use-producer.mjs";
 import { verifyStagedKoffi } from "./scripts/koffi-package-assets.mjs";
 import {
@@ -93,6 +96,12 @@ const asarCliPath = resolve(
   "asar.js",
 );
 const REQUIRED_ASAR_RUNTIME_MODULES = [
+  // pi-zcode: PI 引擎以独立包形态被 host/services 动态 import。@pi/runtime 由 tsc 构建、
+  // workspace 依赖保持外部导入（@zcode/*、@earendil-works/*），electron-builder 只会把
+  // @pi/runtime 本体收进 app.asar 而漏掉整条闭包——安装包启动即 ERR_MODULE_NOT_FOUND，
+  // 数据源静默回退 ZCode 引擎。以 @pi/runtime 为闭包根，递归带齐 @zcode/*、
+  // @earendil-works/*（含 pi-ai 的 partial-json）与 proper-lockfile 的 signal-exit@3 嵌套解析。
+  "@pi/runtime",
   "module-details-from-path",
   "@opentelemetry/api-logs",
   // Bugfix: telemetry 的 OTLP exporter 会在启动阶段加载 sdk-metrics。pnpm 开发态可从
@@ -794,6 +803,12 @@ export default {
       // 后续 host/server 把该目录追加到 PATH；用户版本优先，缺失时再由随包 rg 兜底。
       from: `bundled-tools/${targetPlatform.key}/ripgrep`,
       to: "tools/ripgrep",
+      filter: ["**/*"],
+    },
+    {
+      // PiG 是 PI production runtime 的唯一子进程；与 agent JS bundle 一样必须显式进入 resources。
+      from: `bundled-tools/${targetPlatform.key}/pig`,
+      to: "tools/pig",
       filter: ["**/*"],
     },
     ...nativeSearchReleasePlan.extraResourceToolIds.map((toolId) => ({

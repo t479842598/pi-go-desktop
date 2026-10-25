@@ -27,6 +27,7 @@ vi.mock("electron", () => ({
 vi.mock("@zcode/shared", () => ({
   ZCODE_APP_VERSION_ENV: "ZCODE_APP_VERSION",
   ZCODE_BUILD_COMMIT_ID_ENV: "ZCODE_BUILD_COMMIT_ID",
+  ZCODE_REPORT_VERSION: "0.0.0-test",
   ZCODE_RUNTIME_ENV_KEY: "ZCODE_RUNTIME_ENV",
   ZCODE_TOOL_ENV_PASSTHROUGH_ENV_KEY: "ZCODE_TOOL_ENV_PASSTHROUGH_JSON",
   ZCODE_AGENT_RUNTIME: {
@@ -156,6 +157,7 @@ const originalNodeNoWarnings = process.env["NODE_NO_WARNINGS"];
 const originalNodeEnv = process.env["NODE_ENV"];
 const originalZCodeRuntimeEnv = process.env["ZCODE_RUNTIME_ENV"];
 const originalGlmBinaryPath = process.env["GLM_BINARY_PATH"];
+const originalPigExecutable = process.env["PIG_EXECUTABLE"];
 const originalZCodeBaseUrl = process.env["ZCODE_BASE_URL"];
 const originalZCodeEndpointOrigin = process.env["ZCODE_ENDPOINT_ORIGIN"];
 const originalDynamicWorkflowMode = process.env["ZCODE_DYNAMIC_WORKFLOW_MODE"];
@@ -431,6 +433,7 @@ describe("desktopRuntimeEnv buildHostProcessEnv", () => {
     delete process.env["ZCODE_RUNTIME_ENV"];
     deleteAmbientHostEnv();
     delete process.env["GLM_BINARY_PATH"];
+    delete process.env["PIG_EXECUTABLE"];
     delete process.env["ZCODE_BASE_URL"];
     delete process.env["ZCODE_ENDPOINT_ORIGIN"];
     delete process.env["ZCODE_DYNAMIC_WORKFLOW_MODE"];
@@ -454,6 +457,7 @@ describe("desktopRuntimeEnv buildHostProcessEnv", () => {
     } else {
       process.env["GLM_BINARY_PATH"] = originalGlmBinaryPath;
     }
+    restoreEnvValue("PIG_EXECUTABLE", originalPigExecutable);
     restoreEnvValue("ZCODE_BASE_URL", originalZCodeBaseUrl);
     restoreEnvValue("ZCODE_ENDPOINT_ORIGIN", originalZCodeEndpointOrigin);
     restoreEnvValue("ZAI_OAUTH_ORIGIN", originalZaiOAuthOrigin);
@@ -749,6 +753,42 @@ describe("desktopRuntimeEnv buildHostProcessEnv", () => {
     const env = buildHostProcessEnv({ GLM_BINARY_PATH: localGlmPath });
 
     expectRuntimePath(env.GLM_BINARY_PATH, bundledPath);
+  });
+
+  it("bundled PiG runtime 优先于本地显式 PIG_EXECUTABLE", async () => {
+    const sandboxRoot = mkdtempSync(join(tmpdir(), "zcode-desktop-pig-runtime-env-"));
+    createdDirs.push(sandboxRoot);
+    const platformKey = `${process.platform}-${process.arch}`;
+    const bundledPath = join(sandboxRoot, "bundled-tools", platformKey, "pig", "pig");
+    const localPigPath = join(sandboxRoot, "local", "pig");
+    mkdirSync(join(sandboxRoot, "bundled-tools", platformKey, "pig"), {
+      recursive: true,
+    });
+    mkdirSync(join(sandboxRoot, "local"), { recursive: true });
+    writeFileSync(bundledPath, "bundled\n", "utf-8");
+    writeFileSync(localPigPath, "local\n", "utf-8");
+    process.chdir(sandboxRoot);
+
+    const { buildHostProcessEnv } = await import("../src/main/desktopRuntimeEnv.js");
+
+    const env = buildHostProcessEnv({ PIG_EXECUTABLE: localPigPath });
+
+    expectRuntimePath(env.PIG_EXECUTABLE, bundledPath);
+  });
+
+  it("packaged PI host pins PIG_EXECUTABLE to resources even when the file is missing", async () => {
+    appMock.isPackaged = true;
+    productFlavorMock.value = "production";
+    Object.defineProperty(process, "resourcesPath", {
+      value: "/mock/resources",
+      configurable: true,
+    });
+
+    const { buildHostProcessEnv } = await import("../src/main/desktopRuntimeEnv.js");
+
+    const env = buildHostProcessEnv({ PIG_EXECUTABLE: "/usr/local/bin/pig" });
+
+    expect(env.PIG_EXECUTABLE).toBe("/mock/resources/tools/pig/pig");
   });
 
   it("本地 host 进程加载工作区 .env.development 的测试环境 API 与 ZAI 登录入口", async () => {

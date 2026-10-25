@@ -18,6 +18,7 @@
     "prepare:build-meta": "node scripts/build-metadata.mjs",
     "prepare:runtime-assets": "node scripts/prepare-runtime-assets.mjs",
     "prepare:glm": "node ../../scripts/download-glm.mjs",
+    "prepare:pig-runtime": "node scripts/prepare-pig-runtime.mjs",
     "prepare:agent-bundle": "node scripts/prepare-agent-node-bundle.mjs",
     "prepare:windows-cua-helper": "node scripts/prepare-windows-cua-helper.mjs",
     "prepare:native-search": "node ../../scripts/prepare-native-search-tools.mjs",
@@ -91,7 +92,10 @@
     "yaml": "^2.9.0",
     "yauzl": "^3.3.0",
     "yazl": "^3.3.1",
-    "@pi/runtime": "workspace:*"
+    "@pi/runtime": "workspace:*",
+    "@earendil-works/pi-coding-agent": "0.87.1",
+    "@earendil-works/pi-ai": "0.87.1",
+    "@earendil-works/pi-agent-core": "0.87.1"
   },
   "devDependencies": {
     "@electron/asar": "^3.4.1",

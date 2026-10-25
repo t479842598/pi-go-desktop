@@ -3,7 +3,7 @@ import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { defineConfig } from "tsup";
 import { getBuildMetadata } from "./scripts/build-metadata.mjs";
-import { resolveDesktopProductFlavor } from "./scripts/desktop-product-identity.mjs";
+import { resolveDesktopProductFlavor, resolveDesktopProductIdentity } from "./scripts/desktop-product-identity.mjs";
 const { copyGenUiRuntimeAssets } = await import(
   pathToFileURL(resolve(import.meta.dirname, "scripts/gen-ui-runtime-assets.mjs")).href
 );
@@ -197,6 +197,14 @@ function createSharedDefines() {
     __ZCODE_BUILD_TIME__: JSON.stringify(buildMetadata.buildTime),
     __ZCODE_ENV__: JSON.stringify(zcodeEnv),
     __ZCODE_PRODUCT_FLAVOR__: JSON.stringify(zcodeProductFlavor),
+    // pi-zcode: the packaged runtime identity must come from the same product
+    // identity electron-builder stamps into the bundle. Hardcoding "ZCode" made
+    // a packaged PI build resolve its userData to `~/Library/Application
+    // Support/ZCode`, collide with the user's running ZCode on the
+    // single-instance lock, and silently quit at startup.
+    __ZCODE_PRODUCT_NAME__: JSON.stringify(
+      resolveDesktopProductIdentity({ ...process.env, ZCODE_ENV: zcodeEnv }).productName,
+    ),
     ...buildTimeConfigDefines,
     // Computer Use Helper build identity — helperInstaller 读它决定下载哪个 Helper bundle。
     // 缺失时 installer 抛 "Packaged ZCode is missing its embedded Computer Use Helper build identity"。
