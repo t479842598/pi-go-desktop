@@ -81,6 +81,203 @@ describe("session migration adapters", () => {
     expect(session.entries[0]).toMatchObject({ type: "message", message: { role: "user" } });
   });
 
+  it("preserves Codex function calls and results as Pi tool entries", async () => {
+    const { sources } = await makeWorkspace();
+    const sourceDir = join(sources, "codex");
+    await import("node:fs/promises").then(({ mkdir }) => mkdir(sourceDir, { recursive: true }));
+    const sourcePath = join(sourceDir, "rollout.jsonl");
+    const records = [
+      {
+        type: "response_item",
+        payload: {
+          type: "function_call",
+          call_id: "call-42",
+          name: "read_file",
+          arguments: '{"path":"README.md"}',
+        },
+      },
+      {
+        type: "response_item",
+        payload: {
+          type: "function_call_output",
+          call_id: "call-42",
+          name: "read_file",
+          output: "readme contents",
+        },
+      },
+    ];
+    await writeFile(
+      sourcePath,
+      `${records.map((record) => JSON.stringify(record)).join("\n")}\n`,
+      "utf8",
+    );
+
+    const adapter = new FileSessionSourceAdapter("codex");
+    const [reference] = await adapter.discover({ root: sourceDir });
+    expect(reference).toBeDefined();
+    const session = await adapter.normalize(await adapter.read(reference!), reference!);
+    const assistantEntry = session.entries[0];
+    const resultEntry = session.entries[1];
+
+    expect(assistantEntry).toMatchObject({
+      type: "message",
+      message: {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: "call-42",
+            name: "read_file",
+            arguments: { path: "README.md" },
+          },
+        ],
+      },
+    });
+    expect(resultEntry).toMatchObject({
+      type: "message",
+      parentId: assistantEntry?.id,
+      message: {
+        role: "toolResult",
+        toolCallId: "call-42",
+        toolName: "read_file",
+        content: [{ type: "text", text: "readme contents" }],
+      },
+    });
+  });
+
+  it("preserves Reasonix reasoning, tool calls, and tool results", async () => {
+    const { sources } = await makeWorkspace();
+    const sourceDir = join(sources, "reasonix");
+    await import("node:fs/promises").then(({ mkdir }) => mkdir(sourceDir, { recursive: true }));
+    const sourcePath = join(sourceDir, "session.jsonl");
+    const records = [
+      {
+        role: "assistant",
+        reasoning_content: "Read the requested file.",
+        tool_calls: [
+          { id: "reasonix-call-1", name: "read_file", arguments: '{"path":"README.md"}' },
+        ],
+      },
+      {
+        role: "tool",
+        tool_call_id: "reasonix-call-1",
+        name: "read_file",
+        content: "readme contents",
+      },
+    ];
+    await writeFile(
+      sourcePath,
+      `${records.map((record) => JSON.stringify(record)).join("\n")}\n`,
+      "utf8",
+    );
+
+    const adapter = new FileSessionSourceAdapter("reasonix");
+    const [reference] = await adapter.discover({ root: sourceDir });
+    expect(reference).toBeDefined();
+    const session = await adapter.normalize(await adapter.read(reference!), reference!);
+    const assistantEntry = session.entries[0];
+    const resultEntry = session.entries[1];
+
+    expect(assistantEntry).toMatchObject({
+      type: "message",
+      message: {
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: "Read the requested file." },
+          {
+            type: "toolCall",
+            id: "reasonix-call-1",
+            name: "read_file",
+            arguments: { path: "README.md" },
+          },
+        ],
+      },
+    });
+    expect(resultEntry).toMatchObject({
+      type: "message",
+      parentId: assistantEntry?.id,
+      message: {
+        role: "toolResult",
+        toolCallId: "reasonix-call-1",
+        toolName: "read_file",
+        content: [{ type: "text", text: "readme contents" }],
+      },
+    });
+  });
+
+  it("preserves Claude Code tool_use and tool_result linkage", async () => {
+    const { sources } = await makeWorkspace();
+    const sourceDir = join(sources, "claude-code");
+    await import("node:fs/promises").then(({ mkdir }) => mkdir(sourceDir, { recursive: true }));
+    const sourcePath = join(sourceDir, "session.jsonl");
+    const records = [
+      {
+        type: "assistant",
+        message: {
+          role: "assistant",
+          content: [
+            { type: "text", text: "I will inspect the file." },
+            { type: "tool_use", id: "toolu-7", name: "Read", input: { file_path: "README.md" } },
+          ],
+        },
+      },
+      {
+        type: "user",
+        message: {
+          role: "user",
+          content: [
+            { type: "tool_result", tool_use_id: "toolu-7", content: "readme contents" },
+            { type: "text", text: "Continue with the summary." },
+          ],
+        },
+      },
+    ];
+    await writeFile(
+      sourcePath,
+      `${records.map((record) => JSON.stringify(record)).join("\n")}\n`,
+      "utf8",
+    );
+
+    const adapter = new FileSessionSourceAdapter("claude-code");
+    const [reference] = await adapter.discover({ root: sourceDir });
+    expect(reference).toBeDefined();
+    const session = await adapter.normalize(await adapter.read(reference!), reference!);
+    const assistantEntry = session.entries[0];
+    const resultEntry = session.entries[1];
+    const followupUserEntry = session.entries[2];
+
+    expect(assistantEntry).toMatchObject({
+      type: "message",
+      message: {
+        role: "assistant",
+        content: [
+          { type: "text", text: "I will inspect the file." },
+          {
+            type: "toolCall",
+            id: "toolu-7",
+            name: "Read",
+            arguments: { file_path: "README.md" },
+          },
+        ],
+      },
+    });
+    expect(followupUserEntry).toMatchObject({
+      type: "message",
+      parentId: resultEntry?.id,
+      message: { role: "user", content: [{ type: "text", text: "Continue with the summary." }] },
+    });
+    expect(resultEntry).toMatchObject({
+      type: "message",
+      parentId: assistantEntry?.id,
+      message: {
+        role: "toolResult",
+        toolCallId: "toolu-7",
+        toolName: "Read",
+        content: [{ type: "text", text: "readme contents" }],
+      },
+    });
+  });
+
   it("imports, records excluded secret fields, and reads its manifest back", async () => {
     const { sources, target } = await makeWorkspace();
     const sourceDir = join(sources, "zcode");

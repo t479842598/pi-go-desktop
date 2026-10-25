@@ -176,6 +176,7 @@ export class FileSessionSourceAdapter implements SessionSourceAdapter<SourceDocu
     const entries: CanonicalSessionEntry[] = [];
     const skipped = [...document.skipped];
     const idMap = new Map<string, string>();
+    const claudeToolNames = new Map<string, string>();
     let previousId: string | null = null;
 
     for (const { ordinal, value } of document.records) {
@@ -203,24 +204,32 @@ export class FileSessionSourceAdapter implements SessionSourceAdapter<SourceDocu
         continue;
       }
 
-      const shape = extractMessage(value, this.sourceKind);
-      const id = entryId(reference, ordinal);
-      const timestamp =
-        normalizeTimestamp(shape?.timestamp ?? findTimestamp(value, this.sourceKind)) ?? createdAt;
-      if (shape && shape.role !== "system" && shape.role !== "developer") {
-        const entry = makeMessageEntry(shape, id, previousId, timestamp, ordinal, value);
-        if (entry) {
-          entries.push(entry);
-          previousId = id;
+      const shapes = extractMessages(value, this.sourceKind, claudeToolNames);
+      let written = 0;
+      let skippedRole: string | undefined;
+      for (const [shapeIndex, shape] of shapes.entries()) {
+        if (shape.role === "system" || shape.role === "developer") {
+          skippedRole = shape.role;
           continue;
         }
+        const id = entryId(reference, ordinal, shapeIndex);
+        const timestamp =
+          normalizeTimestamp(shape.timestamp ?? findTimestamp(value, this.sourceKind)) ?? createdAt;
+        const entry = makeMessageEntry(shape, id, previousId, timestamp, ordinal, value);
+        if (!entry) continue;
+        entries.push(entry);
+        previousId = id;
+        written += 1;
       }
+      if (written > 0) continue;
 
-      if (shape?.role === "system" || shape?.role === "developer") {
-        skipped.push({ ordinal, reason: `non-conversation-role:${shape.role}` });
+      if (skippedRole) {
+        skipped.push({ ordinal, reason: `non-conversation-role:${skippedRole}` });
         continue;
       }
 
+      const id = entryId(reference, ordinal);
+      const timestamp = normalizeTimestamp(findTimestamp(value, this.sourceKind)) ?? createdAt;
       entries.push({
         type: "custom",
         id,
@@ -388,10 +397,11 @@ function isPiEntry(value: Record<string, unknown>): boolean {
   );
 }
 
-function extractMessage(
+function extractMessages(
   value: Record<string, unknown>,
   sourceKind: SessionSourceKind,
-): MessageShape | undefined {
+  claudeToolNames: Map<string, string>,
+): MessageShape[] {
   let record = value;
   let payload = asRecord(value.payload);
   if (sourceKind === "codex" && value.type === "response_item" && payload) record = payload;
@@ -403,33 +413,102 @@ function extractMessage(
 
   if (sourceKind === "reasonix") {
     role = readString(value.role);
-    content = value.content;
+    if (role === "assistant") {
+      const blocks: Record<string, unknown>[] = [];
+      const thinking = readString(value.reasoning_content);
+      if (thinking) blocks.push({ type: "thinking", thinking });
+      if (Array.isArray(value.tool_calls)) {
+        for (const item of value.tool_calls) {
+          const toolCall = asRecord(item);
+          if (!toolCall) continue;
+          blocks.push({
+            type: "toolCall",
+            id: toolCall.id,
+            name: toolCall.name,
+            arguments: toolCall.arguments,
+          });
+        }
+      }
+      const text = readString(value.content);
+      if (text) blocks.push({ type: "text", text });
+      content = blocks;
+    } else {
+      content = value.content;
+    }
   } else if (sourceKind === "claude-code") {
     role = readString(value.type);
     content = nestedMessage?.content ?? value.content;
+    if (role === "assistant" && Array.isArray(content)) {
+      for (const item of content) {
+        const block = asRecord(item);
+        if (block?.type !== "tool_use") continue;
+        const toolId = readString(block.id);
+        const toolName = readString(block.name);
+        if (toolId && toolName) claudeToolNames.set(toolId, toolName);
+      }
+    }
+    if (role === "user" && Array.isArray(content)) {
+      const shapes: MessageShape[] = [];
+      for (const item of content) {
+        const block = asRecord(item);
+        if (block?.type !== "tool_result") {
+          shapes.push({ role, content: [item] });
+          continue;
+        }
+        const toolCallId = readString(block.tool_use_id) ?? readString(block.id);
+        if (!toolCallId) {
+          shapes.push({ role, content: [item] });
+          continue;
+        }
+        shapes.push({
+          role: "toolResult",
+          content: block.content,
+          toolCallId,
+          toolName: claudeToolNames.get(toolCallId) ?? "unknown",
+          isError: block.is_error === true,
+        });
+      }
+      if (shapes.length > 0) return shapes;
+    }
   } else if (sourceKind === "codex") {
     const eventType = readString(record.type);
     if (eventType === "user_message") role = "user";
     if (eventType === "agent_message" || eventType === "assistant_message") role = "assistant";
-    if (eventType === "function_call_output" || eventType === "tool_result") role = "toolResult";
+    if (eventType === "function_call") {
+      role = "assistant";
+      content = [
+        {
+          type: "function_call",
+          id: record.call_id ?? record.id,
+          name: record.name,
+          arguments: record.arguments ?? record.input,
+        },
+      ];
+    }
+    if (eventType === "function_call_output" || eventType === "tool_result") {
+      role = "toolResult";
+      content = record.output ?? record.content ?? record.text;
+    }
     content ??= record.message;
   }
 
-  if (!role) return undefined;
+  if (!role) return [];
   const toolCallId =
     readString(record.tool_call_id) ?? readString(record.call_id) ?? readString(record.id);
   const toolName = readString(record.name) ?? readString(record.tool_name);
   const timestamp = typeof record.timestamp === "number" ? record.timestamp : undefined;
-  return {
-    role,
-    content,
-    timestamp,
-    provider: readString(record.provider),
-    model: readString(record.model) ?? readString(record.modelId),
-    toolCallId,
-    toolName,
-    isError: record.isError === true || record.is_error === true,
-  };
+  return [
+    {
+      role,
+      content,
+      timestamp,
+      provider: readString(record.provider),
+      model: readString(record.model) ?? readString(record.modelId),
+      toolCallId,
+      toolName,
+      isError: record.isError === true || record.is_error === true,
+    },
+  ];
 }
 
 function makeMessageEntry(
@@ -506,7 +585,7 @@ function contentBlocks(content: unknown, role: string): Record<string, unknown>[
         type: "toolCall",
         id: readString(block.id) ?? readString(block.call_id) ?? `imported-call-${output.length}`,
         name: readString(block.name) ?? readString(block.tool_name) ?? "unknown",
-        arguments: asRecord(block.input) ?? asRecord(block.arguments) ?? {},
+        arguments: parseToolArguments(block.input ?? block.arguments),
       });
     } else if (role === "toolResult" && type === "tool_result") {
       const result = block.content;
@@ -517,6 +596,19 @@ function contentBlocks(content: unknown, role: string): Record<string, unknown>[
   return output;
 }
 
-function entryId(reference: SessionSourceReference, ordinal: number): string {
-  return `e-${sha256(`${reference.sourceKind}\0${reference.sourceId}\0${reference.sourceDigest ?? ""}\0${ordinal}`).slice(0, 32)}`;
+function parseToolArguments(value: unknown): Record<string, unknown> {
+  const object = asRecord(value);
+  if (object) return object;
+  if (typeof value !== "string") return {};
+  try {
+    const parsed: unknown = JSON.parse(value);
+    return asRecord(parsed) ?? { raw: value };
+  } catch {
+    return { raw: value };
+  }
+}
+
+function entryId(reference: SessionSourceReference, ordinal: number, part = 0): string {
+  const position = part === 0 ? String(ordinal) : `${ordinal}:${part}`;
+  return `e-${sha256(`${reference.sourceKind}\0${reference.sourceId}\0${reference.sourceDigest ?? ""}\0${position}`).slice(0, 32)}`;
 }
