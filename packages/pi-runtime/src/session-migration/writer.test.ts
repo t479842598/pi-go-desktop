@@ -162,6 +162,34 @@ describe("writeCanonicalSession", () => {
     expect(await readFile(first.sessionPath, "utf8")).toBe("existing-user-file\n");
   });
 
+  it("detects tampering even when the old manifest remains embedded", async () => {
+    const root = await mkdtemp(join(tmpdir(), "pi-zcode-migration-tamper-"));
+    roots.push(root);
+    const session = makeSession(join(root, "workspace"));
+    const first = await writeCanonicalSession({
+      sessionRoot: root,
+      session,
+      source: makeSource(),
+      parserVersion: "test/1",
+    });
+    const tampered = (await readFile(first.sessionPath, "utf8")).replace(
+      "Keep this message",
+      "Tampered message",
+    );
+    await writeFile(first.sessionPath, tampered, "utf8");
+
+    const conflict = await writeCanonicalSession({
+      sessionRoot: root,
+      session,
+      source: makeSource(),
+      parserVersion: "test/1",
+    });
+    expect(conflict.duplicate).toBe(false);
+    expect(conflict.manifest.state).toBe("skipped");
+    expect(conflict.manifest.conflicts).toHaveLength(1);
+    expect(await readFile(first.sessionPath, "utf8")).toContain("Tampered message");
+  });
+
   it("reports a content conflict for the same stable source identity", async () => {
     const root = await mkdtemp(join(tmpdir(), "pi-zcode-migration-"));
     roots.push(root);

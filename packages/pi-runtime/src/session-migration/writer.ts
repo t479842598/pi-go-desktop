@@ -258,16 +258,23 @@ async function readExistingSession(path: string): Promise<{
     if (!stat.isFile()) throw new Error(`Existing target is not a regular file: ${path}`);
     const content = await handle.readFile("utf8");
     const lines = content.split(/\r?\n/).filter(Boolean);
-    const manifestRecord = lines
-      .map(parseJsonRecord)
-      .find(
-        (record): record is { type: "custom"; customType: string; data: ImportManifest } =>
-          record?.type === "custom" &&
-          record.customType === MIGRATION_ENTRY_TYPE &&
-          isImportManifest(record.data),
-      );
+    const records = lines.map(parseJsonRecord);
+    const header = records[0];
+    const manifestRecord = records.find(
+      (record): record is { type: "custom"; customType: string; data: ImportManifest } =>
+        record?.type === "custom" &&
+        record.customType === MIGRATION_ENTRY_TYPE &&
+        isImportManifest(record.data),
+    );
+    const baseEntries = records.slice(1).filter((record) => {
+      return !(record?.type === "custom" && record.customType === MIGRATION_ENTRY_TYPE);
+    });
+    const targetDigest =
+      header?.type === "session"
+        ? sha256(canonicalJson({ header, entries: baseEntries }))
+        : sha256(content);
     return {
-      targetDigest: manifestRecord?.data.targetDigest ?? sha256(content),
+      targetDigest,
       ...(manifestRecord ? { manifest: manifestRecord.data } : {}),
     };
   } finally {

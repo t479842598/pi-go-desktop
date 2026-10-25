@@ -6,5 +6,13 @@ export const sessionMigrationModule = {
   id: "session-migration",
   requires: ["pig-runtime", "services", "shared"],
   provides: ["session-migration"],
-  publicEntrypoints: ["index.ts", "contract.ts", "canonical.ts", "writer.ts"],
+  publicEntrypoints: [
+    "index.ts",
+    "contract.ts",
+    "canonical.ts",
+    "adapters.ts",
+    "registry.ts",
+    "service.ts",
+    "writer.ts",
+  ],
 } as const;

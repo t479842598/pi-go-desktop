@@ -1,18 +1,17 @@
 /**
  * Session file discovery.
  *
- * pi stores sessions under `~/.pi/agent/sessions/<encoded-cwd>/<timestamp>_<uuid>.jsonl`.
- * The id a caller holds is the UUID in the filename, so resolving "open session
- * X" means finding that suffix. The filename is only a hint — the header inside
- * the file is authoritative — but scanning names first keeps this cheap enough
- * to sit on the subscribe path.
+ * PiG stores sessions under `~/.pi-web/pig-agent/sessions/<encoded-cwd>/<timestamp>_<id>.jsonl`.
+ * The filename is only an index hint; the JSONL header's `id` is authoritative so
+ * migrated `m-<sha256>` identities resolve exactly like native sessions.
  */
 
 import { open, readdir } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { homedir } from "node:os";
+import { getPiGSessionDir } from "@zcode/services/node";
 
-const SESSION_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const SESSION_ID_PATTERN = /^[a-z0-9][a-z0-9._-]{2,127}$/i;
 
 export interface SessionLocation {
   sessionId: string;
@@ -20,8 +19,13 @@ export interface SessionLocation {
   cwd: string;
 }
 
-/** Default root pi writes sessions under. */
+/** Default root PiG writes sessions under. */
 export function defaultSessionsDir(): string {
+  return getPiGSessionDir();
+}
+
+/** Read-only legacy source used by the Pi migration adapter, never by runtime writes. */
+export function legacyPiSessionsDir(): string {
   return join(homedir(), ".pi", "agent", "sessions");
 }
 
@@ -50,7 +54,8 @@ export async function findSessionFile(
     const projectPath = join(root, projectDir);
     // Re-derive and re-check containment: a crafted directory name must not
     // walk out of the sessions root.
-    if (!resolve(projectPath).startsWith(root)) continue;
+    const resolvedProjectPath = resolve(projectPath);
+    if (resolvedProjectPath !== root && !resolvedProjectPath.startsWith(`${root}/`)) continue;
 
     let files: string[];
     try {
@@ -59,13 +64,13 @@ export async function findSessionFile(
       continue;
     }
 
-    const match = files.find((file) => file.endsWith(suffix));
-    if (!match) continue;
-
-    const sessionFile = join(projectPath, match);
-    const cwd = await readSessionCwd(sessionFile);
-    if (cwd === null) continue;
-    return sessionFile;
+    for (const file of files) {
+      if (!file.endsWith(".jsonl")) continue;
+      const sessionFile = join(projectPath, file);
+      const header = await readSessionHeader(sessionFile);
+      if (!header || header.id !== sessionId) continue;
+      return sessionFile;
+    }
   }
 
   return null;
@@ -75,9 +80,9 @@ export async function findSessionFile(
 export async function locateSession(sessionId: string): Promise<SessionLocation | null> {
   const sessionFile = await findSessionFile(sessionId);
   if (!sessionFile) return null;
-  const cwd = await readSessionCwd(sessionFile);
-  if (cwd === null) return null;
-  return { sessionId, sessionFile, cwd };
+  const header = await readSessionHeader(sessionFile);
+  if (header === null) return null;
+  return { sessionId, sessionFile, cwd: header.cwd };
 }
 
 /**
@@ -86,7 +91,7 @@ export async function locateSession(sessionId: string): Promise<SessionLocation 
  * The first line is a `session` entry holding `cwd`; a corrupt or truncated
  * header means the file cannot be opened, so `null` is the honest answer.
  */
-async function readSessionCwd(sessionFile: string): Promise<string | null> {
+async function readSessionHeader(sessionFile: string): Promise<{ id: string; cwd: string } | null> {
   let handle: Awaited<ReturnType<typeof open>> | undefined;
   try {
     handle = await open(sessionFile, "r");
@@ -95,9 +100,14 @@ async function readSessionCwd(sessionFile: string): Promise<string | null> {
     const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
     const firstLine = buffer.subarray(0, bytesRead).toString("utf8").split("\n", 1)[0] ?? "";
     if (!firstLine) return null;
-    const parsed = JSON.parse(firstLine) as { type?: string; cwd?: string };
-    if (parsed.type !== "session" || typeof parsed.cwd !== "string") return null;
-    return parsed.cwd;
+    const parsed = JSON.parse(firstLine) as { type?: string; id?: string; cwd?: string };
+    if (
+      parsed.type !== "session" ||
+      typeof parsed.id !== "string" ||
+      typeof parsed.cwd !== "string"
+    )
+      return null;
+    return { id: parsed.id, cwd: parsed.cwd };
   } catch {
     return null;
   } finally {

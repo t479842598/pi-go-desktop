@@ -23,6 +23,7 @@ export interface SessionSourceReference {
   readonly sourceKind: SessionSourceKind;
   readonly sourceId: string;
   readonly sourcePath: string;
+  readonly sourceRoot?: string;
   readonly workspacePath?: string;
   readonly sizeBytes?: number;
   readonly sourceDigest?: string;
@@ -55,6 +56,8 @@ export interface CanonicalSession {
   readonly updatedAt: string;
   readonly entries: readonly CanonicalSessionEntry[];
   readonly leafId?: string;
+  /** Parser diagnostics retained for the import manifest, never written into the Pi header. */
+  readonly skippedRecords?: readonly { readonly ordinal?: number; readonly reason: string }[];
   readonly provenance: SessionProvenance;
 }
 
@@ -82,6 +85,7 @@ export interface ImportManifest {
   readonly conflicts: readonly { existingPath: string; reason: string }[];
   readonly secretFieldsExcluded: readonly string[];
   readonly createdAt: string;
+  readonly error?: string;
 }
 
 export interface SessionSourceAdapter<TDocument = unknown> {
