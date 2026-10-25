@@ -163,17 +163,17 @@ export class PiGSessionHost implements RuntimeSessionHost {
   async fork(handle: RuntimeSessionHandle, entryId: string): Promise<string> {
     const entry = this.entries.get(handle.sessionId);
     if (!entry) throw new Error(`Unknown live PiG session: ${handle.sessionId}`);
-    // PiG's fork changes the active branch in the existing session and returns
-    // selected text; it does not allocate a new session id. Clone is the command
-    // that creates an independent session file.
+    // PiG's fork command replaces the active runtime and may allocate a new
+    // session file. Re-read the replacement snapshot and return the ID under
+    // which the runtime was adopted, rather than the superseded handle ID.
     await entry.runtime.request("fork", { entryId });
     const state = await entry.runtime.request<RuntimeStateSnapshot>("get_state");
     const messagesResponse = await entry.runtime.request<unknown>("get_messages");
     entry.unsubscribe();
     entry.listeners.clear();
     this.entries.delete(handle.sessionId);
-    this.adopt(entry.runtime, handle.cwd, state, readMessages(messagesResponse));
-    return handle.sessionId;
+    const nextHandle = this.adopt(entry.runtime, handle.cwd, state, readMessages(messagesResponse));
+    return nextHandle.sessionId;
   }
 
   async setSessionName(sessionId: string, name: string): Promise<void> {

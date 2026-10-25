@@ -9,6 +9,8 @@ class FakeChild extends EventEmitter {
   readonly stdout = new PassThrough();
   readonly stderr = new PassThrough();
   killed = false;
+  private sessionId = "pig-session-1";
+  private sessionFile = "/workspace/project/.pig-agent/sessions/session.jsonl";
 
   constructor(private readonly promptEvents: readonly unknown[] = []) {
     super();
@@ -30,11 +32,16 @@ class FakeChild extends EventEmitter {
             isCompacting: false,
             steeringMode: "one-at-a-time",
             followUpMode: "one-at-a-time",
-            sessionId: "pig-session-1",
-            sessionFile: "/workspace/project/.pig-agent/sessions/session.jsonl",
+            sessionId: this.sessionId,
+            sessionFile: this.sessionFile,
             messageCount: 0,
             pendingMessageCount: 0,
           });
+          break;
+        case "fork":
+          this.sessionId = "pig-session-2";
+          this.sessionFile = "/workspace/project/.pig-agent/sessions/session-fork.jsonl";
+          response({ cancelled: false });
           break;
         case "get_messages":
           response({ messages: [] });
@@ -85,6 +92,27 @@ describe("PiGSessionHost", () => {
 
     host.closeAll();
     expect(host.list()).toEqual([]);
+  });
+
+  it("adopts the replacement session id after PiG forks a session", async () => {
+    const child = new FakeChild();
+    const host = new PiGSessionHost({
+      sessionRoot: "/workspace/project/.pig-agent/sessions",
+      spawnProcess: spawnFake(child),
+      executable: "pig-test",
+    });
+    const handle = await host.open({ cwd: "/workspace/project" });
+
+    const forkedSessionId = await host.fork(handle, "entry-1");
+
+    expect(forkedSessionId).toBe("pig-session-2");
+    expect(host.get("pig-session-1")).toBeUndefined();
+    expect(host.get("pig-session-2")?.sessionId).toBe("pig-session-2");
+    expect(host.list()).toEqual(["pig-session-2"]);
+
+    host.close("pig-session-1");
+    expect(host.list()).toEqual(["pig-session-2"]);
+    host.closeAll();
   });
 
   it("normalizes cumulative text and thinking deltas before forwarding message_update", async () => {

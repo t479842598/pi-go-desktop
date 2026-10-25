@@ -542,11 +542,10 @@ export class PiAgentService {
   /**
    * Branch a session at an entry.
    *
-   * `SessionManager.createBranchedSession` writes a new file and returns its
-   * path; the caller then opens it. This does not mutate the source session,
-   * which is why the live handle is closed afterwards — pi-web learned that
-   * `fork` on a live session rewrites its identity in place, so a wrapper left
-   * registered under the old id serves already-forked state.
+   * PiG replaces the active runtime during `fork`; the host retires the old
+   * registry key, adopts the replacement snapshot, and returns its new ID.
+   * The V4 result therefore tells the UI to bind a new session handle instead
+   * of leaving a wrapper registered under the superseded identity.
    */
   private async forkSession(handle: RuntimeSessionHandle, entryId: string): Promise<string> {
     return this.host.fork(handle, entryId);
