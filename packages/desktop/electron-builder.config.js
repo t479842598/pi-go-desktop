@@ -111,6 +111,9 @@ const REQUIRED_ASAR_RUNTIME_MODULES = [
   // 数据源静默回退 ZCode 引擎。以 @pi/runtime 为闭包根，递归带齐 @zcode/*、
   // @earendil-works/*（含 pi-ai 的 partial-json）与 proper-lockfile 的 signal-exit@3 嵌套解析。
   "@pi/runtime",
+  // 打包 files 规则排除了 node_modules/@zcode/**，但 services 在运行时会
+  // import @zcode/zcode-cua；缺包会让 host 启动直接 ERR_MODULE_NOT_FOUND。
+  "@zcode/zcode-cua",
   "module-details-from-path",
   "@opentelemetry/api-logs",
   // Bugfix: telemetry 的 OTLP exporter 会在启动阶段加载 sdk-metrics。pnpm 开发态可从
@@ -443,7 +446,7 @@ function injectNestedRuntimeDependencyCopies(
 
       mkdirSync(dirname(targetPath), { recursive: true });
       rmSync(targetPath, { force: true, recursive: true });
-      cpSync(available.sourceModulePath, targetPath, { recursive: true });
+      cpSync(available.sourceModulePath, targetPath, { recursive: true, dereference: true });
       nestedTargets.add(targetPath);
       injected += 1;
       console.log(
@@ -479,18 +482,13 @@ function resolveMissingRuntimeModules(appAsarPath) {
     }
     return true;
   });
+  // 只判断“有没有同名条目”会把空的占位目录当成已安装：`!node_modules/@zcode/**`
+  // 排除规则会留下 `/node_modules/@zcode/zcode-cua` 这样的空目录，afterPack 因此
+  // 跳过注入，安装包启动后仍是 ERR_MODULE_NOT_FOUND。必须以 package.json 为准。
   return resolvableRuntimeModules.filter((entry) => {
     const { moduleName } = entry;
     const moduleRoot = `/node_modules/${moduleName}`;
-    if (asarEntrySet.has(moduleRoot)) {
-      return false;
-    }
-    for (const entry of asarEntrySet) {
-      if (entry.startsWith(`${moduleRoot}/`)) {
-        return false;
-      }
-    }
-    return true;
+    return !asarEntrySet.has(`${moduleRoot}/package.json`);
   });
 }
 
@@ -545,7 +543,13 @@ async function injectHoistedRuntimeModulesIntoAsar(context) {
         // 所以在 afterPack 阶段直接重写 app.asar，先把这些运行时包补进去，再交给后续签名和出包。
         mkdirSync(dirname(targetModulePath), { recursive: true });
         rmSync(targetModulePath, { force: true, recursive: true });
-        cpSync(sourceModulePath, targetModulePath, { recursive: true });
+        // pnpm workspace 里这些包是符号链接（@zcode/* 指向 packages/*，
+        // @aws-sdk/* 指向根 node_modules）。cpSync 必须 dereference，否则复制的是
+        // 链接本身或直接失败，asar 里只留下空目录，启动即 ERR_MODULE_NOT_FOUND。
+        cpSync(sourceModulePath, targetModulePath, {
+          recursive: true,
+          dereference: true,
+        });
       }
 
       // 顶层已有同名包但版本不满足父包时（如 proper-lockfile 需要 signal-exit@^3，

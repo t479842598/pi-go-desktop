@@ -92,6 +92,9 @@ const requiredRuntimeModules = [
   // 否则安装包里 host 动态 import("@pi/runtime") 即 ERR_MODULE_NOT_FOUND，数据源静默回退 ZCode。
   // 与 electron-builder.config.js 的 REQUIRED_ASAR_RUNTIME_MODULES 同口径。
   "@pi/runtime",
+  // 打包 files 规则排除了 node_modules/@zcode/**，但 services 在运行时会
+  // import @zcode/zcode-cua；缺包会让 host 启动直接 ERR_MODULE_NOT_FOUND。
+  "@zcode/zcode-cua",
   "@earendil-works/pi-coding-agent",
   "@zcode/shared",
   // Bugfix: telemetry 的 OTLP exporter 在启动阶段依赖 sdk-metrics；开发态 hoist 会掩盖
@@ -733,9 +736,8 @@ function verifyPackagedRuntimeDependencies(os, arch) {
     // @electron/asar 在 Windows 下列目录时会通过 path.join 产出反斜杠路径，
     // 之前这里按 POSIX 路径做精确匹配，导致模块其实已经打进 app.asar，校验却仍然误报缺失。
     // 先统一归一化成正斜杠，避免 Windows 打包机被这道机械校验误伤。
-    const hasModule = asarEntries.some(
-      (entry) => entry === moduleRoot || entry.startsWith(`${moduleRoot}/`),
-    );
+    // 与 afterPack 的缺失判定同口径：必须存在 package.json，空目录不算已装入。
+    const hasModule = asarEntries.includes(`${moduleRoot}/package.json`);
 
     if (!hasModule) {
       // 校验也按依赖闭包展开，确保 afterPack 注入逻辑遗漏子依赖时能在 bundle 阶段直接失败。
