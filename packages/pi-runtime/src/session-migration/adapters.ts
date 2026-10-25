@@ -179,6 +179,7 @@ export class FileSessionSourceAdapter implements SessionSourceAdapter<SourceDocu
     const skipped = [...document.skipped];
     const idMap = new Map<string, string>();
     const piEntryIdsByOrdinal = new Map<number, string>();
+    const codexToolNames = new Map<string, string>();
     const claudeToolNames = new Map<string, string>();
     let previousId: string | null = null;
 
@@ -214,7 +215,7 @@ export class FileSessionSourceAdapter implements SessionSourceAdapter<SourceDocu
         continue;
       }
 
-      const shapes = extractMessages(value, this.sourceKind, claudeToolNames);
+      const shapes = extractMessages(value, this.sourceKind, codexToolNames, claudeToolNames);
       let written = 0;
       let skippedRole: string | undefined;
       for (const [shapeIndex, shape] of shapes.entries()) {
@@ -407,6 +408,7 @@ function isPiEntry(value: Record<string, unknown>): boolean {
 function extractMessages(
   value: Record<string, unknown>,
   sourceKind: SessionSourceKind,
+  codexToolNames: Map<string, string>,
   claudeToolNames: Map<string, string>,
 ): MessageShape[] {
   let record = value;
@@ -483,11 +485,14 @@ function extractMessages(
     if (eventType === "agent_message" || eventType === "assistant_message") role = "assistant";
     if (eventType === "function_call") {
       role = "assistant";
+      const callId = readString(record.call_id) ?? readString(record.id);
+      const name = readString(record.name) ?? readString(record.tool_name);
+      if (callId && name) codexToolNames.set(callId, name);
       content = [
         {
           type: "function_call",
-          id: record.call_id ?? record.id,
-          name: record.name,
+          id: callId,
+          name,
           arguments: record.arguments ?? record.input,
         },
       ];
@@ -502,7 +507,10 @@ function extractMessages(
   if (!role) return [];
   const toolCallId =
     readString(record.tool_call_id) ?? readString(record.call_id) ?? readString(record.id);
-  const toolName = readString(record.name) ?? readString(record.tool_name);
+  const toolName =
+    readString(record.name) ??
+    readString(record.tool_name) ??
+    (sourceKind === "codex" && toolCallId ? codexToolNames.get(toolCallId) : undefined);
   const timestamp = typeof record.timestamp === "number" ? record.timestamp : undefined;
   return [
     {

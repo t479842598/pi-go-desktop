@@ -101,7 +101,6 @@ describe("session migration adapters", () => {
         payload: {
           type: "function_call_output",
           call_id: "call-42",
-          name: "read_file",
           output: "readme contents",
         },
       },
