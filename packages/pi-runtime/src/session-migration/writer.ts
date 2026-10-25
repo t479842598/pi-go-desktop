@@ -85,10 +85,20 @@ export async function writeCanonicalSession(
     cwd: session.cwd,
   };
   const targetDigest = sha256(canonicalJson({ header, entries: baseEntries }));
+  const mappedOrdinals = new Set(session.entries.map((entry) => entry.sourceOrdinal));
+  const skippedOrdinals = new Set<number>();
+  let unindexedSkippedRecords = 0;
+  for (const skipped of options.skipped ?? []) {
+    if (skipped.ordinal === undefined) unindexedSkippedRecords += 1;
+    else skippedOrdinals.add(skipped.ordinal);
+  }
+  const sourceOrdinals = new Set([...mappedOrdinals, ...skippedOrdinals]);
   const counts = {
-    sourceRecords: session.entries.length,
+    sourceRecords: sourceOrdinals.size + unindexedSkippedRecords,
     writtenEntries: baseEntries.length + 1,
-    skippedRecords: options.skipped?.length ?? 0,
+    skippedRecords:
+      [...skippedOrdinals].filter((ordinal) => !mappedOrdinals.has(ordinal)).length +
+      unindexedSkippedRecords,
     unmappedRecords: session.entries.filter((entry) => entry.unmapped).length,
   };
   const sourceRecordMap = session.entries.map((entry) => ({

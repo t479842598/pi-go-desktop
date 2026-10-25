@@ -104,14 +104,16 @@ export class FileSessionSourceAdapter implements SessionSourceAdapter<SourceDocu
     }
 
     const skipped: { ordinal?: number; reason: string }[] = [];
-    let values: unknown[];
+    let values: { ordinal: number; value: unknown }[];
     let header: Record<string, unknown> | undefined;
     if (extname(sourcePath).toLowerCase() === ".json") {
       try {
         const parsed: unknown = JSON.parse(content);
         const object = asRecord(parsed);
         const items = object?.entries ?? object?.messages ?? object?.records;
-        values = Array.isArray(items) ? items : [parsed];
+        values = Array.isArray(items)
+          ? items.map((value, ordinal) => ({ ordinal, value }))
+          : [{ ordinal: 0, value: parsed }];
         header = asRecord(object?.session) ?? (object?.type === "session" ? object : undefined);
       } catch {
         throw new Error("Invalid JSON source session");
@@ -123,7 +125,7 @@ export class FileSessionSourceAdapter implements SessionSourceAdapter<SourceDocu
         const line = lines[index];
         if (!line?.trim()) continue;
         try {
-          values.push(JSON.parse(line) as unknown);
+          values.push({ ordinal: index, value: JSON.parse(line) as unknown });
         } catch {
           skipped.push({ ordinal: index, reason: "malformed-json-line" });
         }
@@ -131,7 +133,7 @@ export class FileSessionSourceAdapter implements SessionSourceAdapter<SourceDocu
     }
 
     const records: ParsedRecord[] = [];
-    values.forEach((value, ordinal) => {
+    values.forEach(({ ordinal, value }) => {
       const object = asRecord(value);
       if (!object) {
         skipped.push({ ordinal, reason: "record-is-not-an-object" });
@@ -160,7 +162,7 @@ export class FileSessionSourceAdapter implements SessionSourceAdapter<SourceDocu
     const now = new Date(document.modifiedAt).toISOString();
     const headerCwd = readString(document.header?.cwd);
     const recordCwd = document.records
-      .map((item) => findWorkspace(item.value, this.sourceKind))
+      .map((item) => findWorkspace(item.value))
       .find((value): value is string => Boolean(value && isAbsolute(value)));
     const cwd =
       headerCwd && isAbsolute(headerCwd)
@@ -176,22 +178,30 @@ export class FileSessionSourceAdapter implements SessionSourceAdapter<SourceDocu
     const entries: CanonicalSessionEntry[] = [];
     const skipped = [...document.skipped];
     const idMap = new Map<string, string>();
+    const piEntryIdsByOrdinal = new Map<number, string>();
     const claudeToolNames = new Map<string, string>();
     let previousId: string | null = null;
+
+    if (this.sourceKind === "pi") {
+      for (const { ordinal, value } of document.records) {
+        if (!isPiEntry(value)) continue;
+        const originalId = readString(value.id);
+        const id = originalId && !idMap.has(originalId) ? originalId : entryId(reference, ordinal);
+        if (originalId && !idMap.has(originalId)) idMap.set(originalId, id);
+        piEntryIdsByOrdinal.set(ordinal, id);
+      }
+    }
 
     for (const { ordinal, value } of document.records) {
       if (this.sourceKind === "pi" && isPiEntry(value)) {
         const originalId = readString(value.id);
-        const id = originalId && !idMap.has(originalId) ? originalId : entryId(reference, ordinal);
-        if (originalId && !idMap.has(originalId)) idMap.set(originalId, id);
+        const id = piEntryIdsByOrdinal.get(ordinal) ?? entryId(reference, ordinal);
         const timestamp = normalizeTimestamp(value.timestamp) ?? createdAt;
-        const parent = value.parentId;
-        const parentId =
-          parent === null
-            ? null
-            : typeof parent === "string"
-              ? (idMap.get(parent) ?? previousId)
-              : previousId;
+        const parent = typeof value.parentId === "string" ? value.parentId : null;
+        const parentId = parent === null ? null : (idMap.get(parent) ?? null);
+        if (parent && !idMap.has(parent)) {
+          skipped.push({ ordinal, reason: `unresolved-parent-reference:${parent}` });
+        }
         entries.push({
           ...(value as unknown as SessionEntry),
           id,
@@ -369,10 +379,7 @@ function findTimestamp(
   return normalizeTimestamp(timestamp);
 }
 
-function findWorkspace(
-  value: Record<string, unknown>,
-  sourceKind: SessionSourceKind,
-): string | undefined {
+function findWorkspace(value: Record<string, unknown>): string | undefined {
   const payload = asRecord(value.payload);
   const message = asRecord(value.message);
   const meta = asRecord(value.meta) ?? asRecord(payload?.meta);

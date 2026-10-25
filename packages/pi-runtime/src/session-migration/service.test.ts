@@ -308,6 +308,65 @@ describe("session migration adapters", () => {
     });
   });
 
+  it("preserves JSONL line ordinals after malformed records and counts source records", async () => {
+    const { sources, target } = await makeWorkspace();
+    const sourceDir = join(sources, "codex");
+    await import("node:fs/promises").then(({ mkdir }) => mkdir(sourceDir, { recursive: true }));
+    const sourcePath = join(sourceDir, "rollout.jsonl");
+    const validRecord = {
+      type: "response_item",
+      payload: { type: "message", role: "user", content: [{ type: "input_text", text: "hello" }] },
+    };
+    await writeFile(sourcePath, `{not-json}\n${JSON.stringify(validRecord)}\n`, "utf8");
+
+    const service = new SessionMigrationService({ sessionRoot: target });
+    const [reference] = await service.discover("codex", sourceDir);
+    expect(reference).toBeDefined();
+    const manifest = await service.import(reference!);
+
+    expect(manifest.state).toBe("committed");
+    expect(manifest.sourceRecordMap).toMatchObject([{ sourceOrdinal: 1 }]);
+    expect(manifest.counts).toMatchObject({ sourceRecords: 2, skippedRecords: 1 });
+    expect(manifest.skipped).toContainEqual({ ordinal: 0, reason: "malformed-json-line" });
+  });
+
+  it("preserves Pi parent references when a parent appears later in the source file", async () => {
+    const { sources } = await makeWorkspace();
+    const sourceDir = join(sources, "pi");
+    await import("node:fs/promises").then(({ mkdir }) => mkdir(sourceDir, { recursive: true }));
+    const sourcePath = join(sourceDir, "session.jsonl");
+    const records = [
+      {
+        type: "message",
+        id: "child-entry",
+        parentId: "later-parent",
+        timestamp: createdAt,
+        message: { role: "assistant", content: [{ type: "text", text: "branch reply" }] },
+      },
+      {
+        type: "message",
+        id: "later-parent",
+        parentId: null,
+        timestamp: createdAt,
+        message: { role: "user", content: [{ type: "text", text: "branch prompt" }] },
+      },
+    ];
+    await writeFile(
+      sourcePath,
+      `${JSON.stringify({ type: "session", version: 3, id: "pi-source", cwd: "/workspace" })}\n${records.map((record) => JSON.stringify(record)).join("\n")}\n`,
+      "utf8",
+    );
+
+    const adapter = new FileSessionSourceAdapter("pi");
+    const [reference] = await adapter.discover({ root: sourceDir });
+    expect(reference).toBeDefined();
+    const session = await adapter.normalize(await adapter.read(reference!), reference!);
+
+    expect(session.entries[0]).toMatchObject({ id: "child-entry", parentId: "later-parent" });
+    expect(session.entries[1]).toMatchObject({ id: "later-parent", parentId: null });
+    expect(session.skippedRecords).toEqual([]);
+  });
+
   it("persists malformed-only sources as failed audit reports", async () => {
     const { sources, target } = await makeWorkspace();
     const sourceDir = join(sources, "codex");
